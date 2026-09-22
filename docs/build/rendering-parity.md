@@ -126,6 +126,79 @@ The label itself has no render target. A frame comparator resolves the preceding
 rendered event on the same target. Without `MU_RENDERDOC_LABELS`, the client
 does not enqueue a label command or call the GPU debug-label API.
 
+### Lost Tower wall fixture
+
+The current SDL GPU client accepts a reproducible static-object fixture:
+
+```bash
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file lost-tower-wall \
+  ./Main --scene=lost-tower-wall-v1
+```
+
+The selector is parsed from `lpszCommandLine`: Windows supplies that command
+line and the Linux entry point forwards `argv` into it. The historical a410
+Linux client did not forward `argv`; keep its compatibility patch local and
+version it with the comparison fixture rather than changing its tracked
+history.
+
+`lost-tower-wall-v1` pins the current client to a windowed `800×600` target, Lost
+Tower map `4`, grid position `(208, 75)`, and a fixed post-update Default-camera
+pose. The fixture applies its target after loading `config.ini` and before SDL
+creates the window, so a saved fullscreen or display resolution cannot alter a
+capture. Its world viewport reserves the legacy `48` reference pixels rather
+than the gameplay HUD's `51`; this fixture-only override removes a known
+geometric delta from cross-build material comparisons and is not a judgment on
+the new HUD design. The historical client already reserves `48` reference
+pixels, and its local comparison patch MUST apply the same windowed target. The
+position is the center of MuGold's existing Lost Tower safe-zone gate
+(`203..213`, `70..81`); no MuGold source change is required. Configure the
+dedicated fixture character's persisted map and position externally, without
+committing credentials.
+
+The fixture becomes ready only after the server's join or revival packet
+reports exactly that map and position. A mismatch emits `[SceneFixture] ... is
+not ready`; the client retains its ordinary camera and `rand()` brightness
+path, so a capture cannot be reported as fixture-ready accidentally.
+
+While selected, the fixture freezes the clock around the main-scene update, where
+Lost Tower derives static-object texture coordinates. It restores wall-clock
+time before reconnect/network work, then freezes the render clock again. Once
+ready, the camera is applied after the active camera's normal update and its
+frustum is rebuilt. Lost Tower static-object brightness uses a fixed fixture
+value instead of calling `rand()`; this does not call `srand()` or reseed the
+process-wide random generator.
+
+#### Independent-capture check
+
+Capture two separate client launches; do not reuse a process or substitute a
+numeric RenderDoc event ID:
+
+```bash
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file fixture-run-a \
+  ./Main --scene=lost-tower-wall-v1
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file fixture-run-b \
+  ./Main --scene=lost-tower-wall-v1
+```
+
+For each capture, wait until the log reports the fixture ready after the
+server's join or revival packet. In the comparator manifest, configure both
+render targets with:
+
+```toml
+anchor="mu.scene.static-objects.complete"
+color_target=0
+```
+
+The comparator resolves the rendered event immediately preceding that anchor.
+Record the capture hashes, revision, data and font identifiers, backend, GPU,
+driver, window mode, VSync, frame limit, and display size with the result.
+
+The fixture proves reproducibility of the anchored static-object render target
+between independent launches under the same executable, data, fonts, machine,
+GPU driver, backend, resolution, and runtime settings. It does not prove
+parity between operating systems, GPU drivers, GPUs, resolutions, or a final
+frame after character and UI passes. Measure those targets separately.
+
 Then:
 
 1. Enable `$glstats on`.

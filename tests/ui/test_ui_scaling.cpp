@@ -9,6 +9,7 @@
 #include "Data/GameConfig/GameConfig.h"
 #include "Data/GameConfig/GameConfigConstants.h"
 #include "Engine/Object/ZzzInventory.h"
+#include "Scenes/SceneFixture.h"
 #include "UI/Legacy/UIControls.h"
 #include "UI/Legacy/UIMapName.h"
 #include "UI/NewUI/Dialogs/NewUIChatCommandWindow.h"
@@ -76,6 +77,31 @@ public:
     int renderMouseX = -1;
     int renderMouseY = -1;
 };
+}
+
+TEST_CASE("selected scene fixture fixes its windowed capture target [scene][fixture]")
+{
+    SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1");
+
+    const auto targetWindowSize = SceneFixture::GetTargetWindowSize();
+    CHECK(targetWindowSize.has_value());
+    if (targetWindowSize)
+    {
+        CHECK(targetWindowSize->width == 800);
+        CHECK(targetWindowSize->height == 600);
+    }
+    const auto worldBottomReserve = SceneFixture::GetWorldViewportBottomReserve();
+    CHECK(worldBottomReserve.has_value());
+    if (worldBottomReserve)
+    {
+        CHECK(*worldBottomReserve == doctest::Approx(48.0f));
+    }
+    CHECK(UI::Scaling::WorldViewport(800, 600, false).height == 540);
+
+    SceneFixture::ConfigureFromCommandLine(L"");
+    CHECK_FALSE(SceneFixture::GetTargetWindowSize().has_value());
+    CHECK_FALSE(SceneFixture::GetWorldViewportBottomReserve().has_value());
+    CHECK(UI::Scaling::WorldViewport(800, 600, false).height == 536);
 }
 
 TEST_CASE("teleport layout uses stable width and fits above the dock [ui][scaling]")
@@ -625,20 +651,25 @@ TEST_CASE("experience transform spans the window with HUD vertical scale [ui][sc
     CHECK(UI::Scaling::PositionY(experience, 480.0f) == doctest::Approx(1200.0f));
 }
 
-TEST_CASE("world viewport spans the window while docks remain at the rounded HUD top [ui][scaling]")
+TEST_CASE("world viewport ends at the rounded HUD top except in top view [ui][scaling]")
 {
     const auto hd = UI::Scaling::WorldViewport(1280, 720, false);
     CHECK(hd.width == 1280);
-    CHECK(hd.height == 720);
-    CHECK(UI::Scaling::WorldViewportAspect(1280, 720, false) == doctest::Approx(1280.0f / 720.0f));
+    CHECK(hd.height == 644);
+    CHECK(UI::Scaling::WorldViewportAspect(1280, 720, false) == doctest::Approx(1280.0f / 644.0f));
     const auto hdDock = UI::Scaling::DockLeftTransform(1280, 720);
-    CHECK(UI::Scaling::PositionY(hdDock, 432.0f) == doctest::Approx(644.0f));
+    CHECK(UI::Scaling::PositionY(hdDock, 432.0f) == doctest::Approx(static_cast<float>(hd.height)));
+
+    const auto fixture = UI::Scaling::WorldViewport(800, 600, false);
+    CHECK(fixture.width == 800);
+    CHECK(fixture.height == 536);
+    CHECK(UI::Scaling::WorldViewportAspect(800, 600, false) == doctest::Approx(800.0f / 536.0f));
 
     const auto sxga = UI::Scaling::WorldViewport(1280, 1024, false);
     CHECK(sxga.width == 1280);
-    CHECK(sxga.height == 1024);
+    CHECK(sxga.height == 922);
     const auto sxgaDock = UI::Scaling::DockLeftTransform(1280, 1024);
-    CHECK(UI::Scaling::PositionY(sxgaDock, 432.0f) == doctest::Approx(922.0f));
+    CHECK(UI::Scaling::PositionY(sxgaDock, 432.0f) == doctest::Approx(static_cast<float>(sxga.height)));
 
     const auto topView = UI::Scaling::WorldViewport(1920, 1200, true);
     CHECK(topView.width == 1920);

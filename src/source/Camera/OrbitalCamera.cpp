@@ -825,8 +825,8 @@ void OrbitalCamera::UpdateFrustum()
     up[1] = ca0 * ca2;
     up[2] = -sa0;
 
-    // Build the frustum with the same aspect ratio as the active projection.
-    // MainScene's BeginOpenglPhysical() and WorldViewportAspect() both use the full physical window.
+    // Build the frustum with the same aspect ratio as the active world viewport.
+    // MainScene's BeginOpenglPhysical() and WorldViewportAspect() share that rectangle.
     extern unsigned int WindowWidth;
     extern unsigned int WindowHeight;
     extern EGameScene SceneFlag;

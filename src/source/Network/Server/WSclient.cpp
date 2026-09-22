@@ -22,6 +22,7 @@
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Engine/Object/ZzzOpenData.h"
 #include "Scenes/SceneCore.h"
+#include "Scenes/SceneFixture.h"
 #include "Network/Reconnect/ReconnectManager.h"
 #include "Network/IncomingPacketQueue.h"
 #include "I18N/All.h"
@@ -84,6 +85,21 @@
 #include "Dotnet/Connection.h"
 
 #include "MUHelper/MuHelper.h"
+
+namespace
+{
+void ObserveSceneFixtureSpawn(int map, BYTE positionX, BYTE positionY)
+{
+    if (!SceneFixture::IsActive())
+    {
+        return;
+    }
+
+    const bool ready = SceneFixture::ObserveServerSpawn(map, positionX, positionY);
+    g_ConsoleDebug->Write(MCD_RECEIVE, L"[SceneFixture] %ls is %ls after server spawn Map:%d X:%d Y:%d",
+                          SceneFixture::GetId(), ready ? L"ready" : L"not ready", map, positionX, positionY);
+}
+} // namespace
 
 #define MAX_DEBUG_MAX 10
 
@@ -1138,6 +1154,8 @@ BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
 
     matchEvent::CreateEventMatch(gMapManager.WorldActive);
 
+    ObserveSceneFixtureSpawn(Data->Map, Data->PositionX, Data->PositionY);
+
     CreateCharacterPointer(c, MODEL_PLAYER, Data->PositionX, Data->PositionY, ((float)Data->Angle - 1.f) * 45.f);
     c->Key = HeroKey;
 
@@ -1343,6 +1361,8 @@ void ReceiveRevival(const BYTE* ReceiveBuffer)
     BYTE BackUpGuildType = c->GuildType;
     BYTE BackUpGuildRelationShip = c->GuildRelationShip;
     BYTE byBackupEtcPart = c->EtcPart;
+
+    ObserveSceneFixtureSpawn(Data->Map, Data->PositionX, Data->PositionY);
 
     CreateCharacterPointer(c, MODEL_PLAYER, Data->PositionX, Data->PositionY, ((float)Data->Angle - 1.f) * 45.f);
     c->Key = HeroKey;

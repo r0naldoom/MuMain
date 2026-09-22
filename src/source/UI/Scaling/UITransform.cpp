@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "App/stdafx.h"
+#include "Scenes/SceneFixture.h"
 
 namespace
 {
@@ -63,10 +64,10 @@ bool ContainsLogicalRect(const UI::Scaling::Transform& transform, float windowX,
     return x >= left && x < right && y >= top && y < bottom;
 }
 
-int RoundedBottomHudTop(int windowWidth, int windowHeight)
+int RoundedBottomHudTop(int windowWidth, int windowHeight, float bottomReserve = kHudFrameHeight)
 {
     const float hudTop =
-        static_cast<float>(windowHeight) - kHudFrameHeight * UI::Scaling::BottomHudScale(windowWidth, windowHeight);
+        static_cast<float>(windowHeight) - bottomReserve * UI::Scaling::BottomHudScale(windowWidth, windowHeight);
     return std::max(static_cast<int>(std::lround(hudTop)), 1);
 }
 
@@ -206,10 +207,17 @@ float UI::Scaling::FloatingWorkspaceContentHeight(int windowWidth, int windowHei
     return physicalHeight / transform.scaleY;
 }
 
-UI::Scaling::Viewport UI::Scaling::WorldViewport(int windowWidth, int windowHeight, bool)
+UI::Scaling::Viewport UI::Scaling::WorldViewport(int windowWidth, int windowHeight, bool topViewEnabled)
 {
     const int physicalWidth = std::max(windowWidth, 1);
-    return {0, 0, physicalWidth, std::max(windowHeight, 1)};
+    const int physicalHeight = std::max(windowHeight, 1);
+    // The fixture retains the legacy reserve only to remove known geometry drift
+    // from cross-build material comparisons; the gameplay HUD keeps its 51-pixel reserve.
+    const float bottomReserve =
+        SceneFixture::GetWorldViewportBottomReserve().value_or(kHudFrameHeight);
+    const int worldHeight =
+        topViewEnabled ? physicalHeight : RoundedBottomHudTop(windowWidth, windowHeight, bottomReserve);
+    return {0, 0, physicalWidth, worldHeight};
 }
 
 float UI::Scaling::WorldViewportAspect(int windowWidth, int windowHeight, bool topViewEnabled)

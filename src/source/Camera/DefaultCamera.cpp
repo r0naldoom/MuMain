@@ -13,6 +13,7 @@
 #include "CameraManager.h"
 #include "CameraProjection.h"
 #include "Scenes/SceneCore.h"
+#include "Scenes/SceneFixture.h"
 #include "Engine/Object/ZzzInterface.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Render/Renderer/MuRenderer.h"
@@ -391,9 +392,8 @@ bool DefaultCamera::Update()
 
     UpdateCameraDistance();
 
-    // Phase 5 fix: Update frustum only when camera state actually changes
-    // This avoids expensive frustum rebuild every frame (20-25% performance gain)
-    if (NeedsFrustumUpdate())
+    // Fixture camera control runs after the active camera's normal update.
+    if (SceneFixture::ApplyCameraPose(m_State) || NeedsFrustumUpdate())
     {
         UpdateFrustum();
     }

@@ -51,6 +51,7 @@ FrameTimingState g_frameTiming;
 #include "App/Platform/Windows/Winmain.h"
 #include "Camera/CameraManager.h"
 #include "Camera/CameraMode.h"
+#include "Scenes/SceneFixture.h"
 
 #ifdef _EDITOR
 #include "../MuEditor/Core/MuEditorCore.h"
@@ -1430,7 +1431,21 @@ void MainScene(HDC hDC)
 void RenderScene(HDC hDC)
 {
     CalcFPS();
+
+    const bool freezeFixtureUpdate = SceneFlag == MAIN_SCENE && SceneFixture::IsActive();
+    const double worldTimeBeforeFixtureUpdate = WorldTime;
+    if (freezeFixtureUpdate)
+    {
+        // MoveMainScene derives static-object UVs before the anchor render pass.
+        SceneFixture::ApplyWorldTime(WorldTime);
+    }
+
     UpdateSceneState();
+
+    if (freezeFixtureUpdate)
+    {
+        WorldTime = worldTimeBeforeFixtureUpdate;
+    }
 
     // Drive auto-reconnect after the scene loops have advanced this frame. It
     // runs across all scenes because reconnect passes through the login,
@@ -1441,6 +1456,11 @@ void RenderScene(HDC hDC)
 
     try
     {
+        if (SceneFlag == MAIN_SCENE)
+        {
+            SceneFixture::ApplyWorldTime(WorldTime);
+        }
+
         g_Luminosity = sinf(WorldTime * 0.004f) * 0.15f + 0.6f;
         switch (SceneFlag)
         {

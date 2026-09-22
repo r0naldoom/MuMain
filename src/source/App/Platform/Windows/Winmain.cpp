@@ -29,6 +29,7 @@
 #include "Engine/Object/ZzzOpenData.h"
 #include "Scenes/SceneCore.h"
 #include "Scenes/SceneManager.h"
+#include "Scenes/SceneFixture.h"
 #include "Network/Reconnect/ReconnectManager.h"
 #include "Network/IncomingPacketQueue.h"
 #include "Core/Time/FrameTimerScheduler.h"
@@ -1903,6 +1904,9 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     std::wstring portableCommandLine = BuildPortableCommandLine(szCmdLine);
     wchar_t* lpszCommandLine = portableCommandLine.data();
 #endif
+    // Linux forwards argv through szCmdLine; use the platform-neutral command line here.
+    SceneFixture::ConfigureFromCommandLine(lpszCommandLine);
+
     wchar_t lpszFile[MAX_PATH];
     WORD wVersion[4] = {
         0,
@@ -1977,6 +1981,14 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     WindowHeight = GameConfig::GetInstance().GetWindowHeight();
     g_bUseWindowMode = GameConfig::GetInstance().GetWindowMode() ? TRUE : FALSE;
     g_bUseFullscreenMode = !g_bUseWindowMode;
+
+    if (const auto targetWindowSize = SceneFixture::GetTargetWindowSize())
+    {
+        WindowWidth = targetWindowSize->width;
+        WindowHeight = targetWindowSize->height;
+        g_bUseWindowMode = TRUE;
+        g_bUseFullscreenMode = FALSE;
+    }
 
     // Apply audio settings from INI — volume 0 = off, >0 = on
     m_SoundOnOff = (GameConfig::GetInstance().GetSoundVolume() > 0) ? 1 : 0;
