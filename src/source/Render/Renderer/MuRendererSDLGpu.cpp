@@ -537,6 +537,7 @@ enum class RenderCmdType : uint8_t
 {
     SetViewport,
     SetScissor, // pixel-level rect clip — Vulkan/Metal/D3D12 viewport alone doesn't clip
+    DebugLabel,
 #ifdef _EDITOR
     EditorOverlay,
 #endif
@@ -550,6 +551,7 @@ enum class RenderCmdType : uint8_t
 struct RenderCmd
 {
     RenderCmdType type;
+    RenderDebugLabel debugLabel{};
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUTexture* texture;
     SDL_GPUSampler* sampler;
@@ -579,6 +581,19 @@ static std::vector<RenderCmd> s_renderCmds;
 static constexpr std::size_t kNoDrawCommand = std::numeric_limits<std::size_t>::max();
 static Render::DrawCommandHistory s_previousDrawCommands;
 
+constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-objects.complete";
+
+[[nodiscard]] static const char* RenderDebugLabelText(RenderDebugLabel label)
+{
+    switch (label)
+    {
+    case RenderDebugLabel::StaticObjectsComplete:
+        return kStaticObjectsCompleteDebugLabel;
+    }
+
+    return nullptr;
+}
+
 [[nodiscard]] static bool IsDrawCommand(RenderCmdType type)
 {
 #ifdef _EDITOR
@@ -587,7 +602,7 @@ static Render::DrawCommandHistory s_previousDrawCommands;
         return true;
     }
 #endif
-    return type != RenderCmdType::SetViewport && type != RenderCmdType::SetScissor;
+    return type != RenderCmdType::SetViewport && type != RenderCmdType::SetScissor && type != RenderCmdType::DebugLabel;
 }
 
 [[nodiscard]] static bool IsUnsafeInvalidatedDrawCommand(RenderCmdType type)
@@ -2046,6 +2061,16 @@ public:
                     break;
                 }
 
+                case RenderCmdType::DebugLabel:
+                {
+                    const char* label = RenderDebugLabelText(cmd.debugLabel);
+                    if (label)
+                    {
+                        SDL_InsertGPUDebugLabel(s_cmdBuf, label);
+                    }
+                    break;
+                }
+
 #ifdef _EDITOR
                 case RenderCmdType::EditorOverlay:
                 {
@@ -2174,6 +2199,23 @@ public:
             mu::log::Get("render")->warn(
                 "10 frames elapsed with zero draw calls; game may not be calling RenderQuad2D/RenderTriangles");
         }
+    }
+
+    void InsertDebugLabel(RenderDebugLabel label) override
+    {
+        if (!s_frameActive)
+        {
+            return;
+        }
+
+        RenderCmd cmd{};
+        cmd.type = RenderCmdType::DebugLabel;
+        cmd.debugLabel = label;
+        s_renderCmds.push_back(cmd);
+
+        // A label marks a capture boundary, so later geometry must not merge with
+        // the command preceding it.
+        s_previousDrawCommands.fill(kNoDrawCommand);
     }
 
     [[nodiscard]] bool RequestFramePixels() override

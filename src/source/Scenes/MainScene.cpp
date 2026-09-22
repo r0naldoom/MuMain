@@ -3,6 +3,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include <cstdlib>
+
 #include "Engine/Object/EditObjects.h"
 #include "UI/Chat/Chat.h"
 #include "MainScene.h"
@@ -12,6 +14,7 @@
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
+#include "Render/Renderer/MuRenderer.h"
 #include "Engine/Object/ZzzInterface.h"
 #include "Input/Selection.h"
 #include "Render/Effects/ZzzEffect.h"
@@ -463,6 +466,25 @@ bool IsWingExtraLayersDisabledDebug()
     return g_bDisableWingExtraLayersDebug;
 }
 
+namespace
+{
+[[nodiscard]] bool RenderDocLabelsEnabled()
+{
+    static const bool enabled = std::getenv("MU_RENDERDOC_LABELS") != nullptr;
+    return enabled;
+}
+
+void InsertStaticObjectsCompletionLabel()
+{
+    if (!RenderDocLabelsEnabled())
+    {
+        return;
+    }
+
+    mu::GetRenderer().InsertDebugLabel(mu::RenderDebugLabel::StaticObjectsComplete);
+}
+} // namespace
+
 /**
  * @brief Renders all 3D game entities (terrain, objects, characters, effects).
  *
@@ -470,6 +492,7 @@ bool IsWingExtraLayersDisabledDebug()
  * @param width Screen width for water terrain rendering
  * @param height Screen height for water terrain rendering
  */
+
 static void RenderGameWorld(BYTE& byWaterMap, int width, int height)
 {
 #ifdef _EDITOR
@@ -506,7 +529,13 @@ static void RenderGameWorld(BYTE& byWaterMap, int width, int height)
     }
 
     if (!gMapManager.IsPKField() && !IsDoppelGanger2() && renderStatic)
-        { FRAME_PROFILE(Objects); RenderObjects(); }
+    {
+        {
+            FRAME_PROFILE(Objects);
+            RenderObjects();
+        }
+        InsertStaticObjectsCompletionLabel();
+    }
 
     if (renderEffects)
     {

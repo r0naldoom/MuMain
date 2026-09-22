@@ -103,6 +103,29 @@ $env:MU_D3D12_DISABLE_TRIANGLE_MERGING = "1"
 .\Main.exe
 ```
 
+### RenderDoc semantic object-pass label
+
+The static-object completion label is disabled by default. Enable it only for a
+RenderDoc capture:
+
+```bash
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file scene-anchor ./Main
+```
+
+The enabled label is `mu.scene.static-objects.complete`. It marks the command
+stream immediately after the initial static-object pass and before character
+rendering. Verify a capture with:
+
+```bash
+rdc --session scene-anchor open scene-anchor.rdc
+rdc --session scene-anchor events --filter 'mu.scene.static-objects.complete' --json
+rdc --session scene-anchor close
+```
+
+The label itself has no render target. A frame comparator resolves the preceding
+rendered event on the same target. Without `MU_RENDERDOC_LABELS`, the client
+does not enqueue a label command or call the GPU debug-label API.
+
 Then:
 
 1. Enable `$glstats on`.

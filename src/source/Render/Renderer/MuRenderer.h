@@ -146,6 +146,11 @@ struct RendererStats
     double submitMilliseconds = 0.0;
 };
 
+enum class RenderDebugLabel : std::uint8_t
+{
+    StaticObjectsComplete,
+};
+
 // ---------------------------------------------------------------------------
 // IMuRenderer: Pure abstract rendering interface.
 // Game code obtains the active backend via GetRenderer() (see below).
@@ -177,6 +182,9 @@ public:
 
     // Render a quad strip from world-space vertices (requires >= 4 vertices, even count ideal).
     virtual void RenderQuadStrip(std::span<const Vertex3D> vertices, std::uint32_t textureId) = 0;
+
+    // Inserts a capture-only label into the renderer command stream.
+    virtual void InsertDebugLabel(RenderDebugLabel /*label*/) {}
 
     // Set the active alpha-blending equation.
     virtual void SetBlendMode(BlendMode mode) = 0;
