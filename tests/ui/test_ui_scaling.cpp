@@ -139,6 +139,11 @@ TEST_CASE("scene fixture schedules one capture after readiness [scene][fixture]"
 
     SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1");
     CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    // The fixture is process-wide state: leaving it active here changes the world
+    // viewport for every test that runs after this one.
+    SceneFixture::ConfigureFromCommandLine(L"");
+    CHECK_FALSE(SceneFixture::IsActive());
 }
 
 TEST_CASE("teleport layout uses stable width and fits above the dock [ui][scaling]")
