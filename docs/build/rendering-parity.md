@@ -131,8 +131,9 @@ does not enqueue a label command or call the GPU debug-label API.
 The current SDL GPU client accepts a reproducible static-object fixture:
 
 ```bash
+ulimit -n 65536
 MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file lost-tower-wall \
-  ./Main --scene=lost-tower-wall-v1
+  ./Main --scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture
 ```
 
 The selector is parsed from `lpszCommandLine`: Windows supplies that command
@@ -168,21 +169,32 @@ frustum is rebuilt. Lost Tower static-object brightness uses a fixed fixture
 value instead of calling `rand()`; this does not call `srand()` or reseed the
 process-wide random generator.
 
+`--capture-when-ready` is opt-in; without it, the fixture leaves RenderDoc's
+manual F12 capture unchanged. With it, the fixture waits 240 rendered frames
+following readiness before calling RenderDoc's in-process trigger. Record
+`warmup_frames = 240` in the comparison manifest. `--exit-after-capture`
+posts the normal clean-shutdown event two completed frames after that capture,
+so `renderdoccmd --wait-for-exit` can finalize the `.rdc`. RenderDoc captures
+the frame after the trigger call. If the client was not launched under RenderDoc,
+the automatic trigger emits one diagnostic line, does nothing, and does not
+request shutdown.
+
 #### Independent-capture check
 
 Capture two separate client launches; do not reuse a process or substitute a
 numeric RenderDoc event ID:
 
 ```bash
+ulimit -n 65536
 MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file fixture-run-a \
-  ./Main --scene=lost-tower-wall-v1
+  ./Main --scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture
 MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file fixture-run-b \
-  ./Main --scene=lost-tower-wall-v1
+  ./Main --scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture
 ```
 
-For each capture, wait until the log reports the fixture ready after the
-server's join or revival packet. In the comparator manifest, configure both
-render targets with:
+After logging in once, let each client observe the matching server spawn. The
+fixture then captures and exits automatically. In the comparator manifest,
+configure both render targets with:
 
 ```toml
 anchor="mu.scene.static-objects.complete"

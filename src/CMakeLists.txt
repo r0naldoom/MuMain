@@ -536,6 +536,11 @@ target_include_directories(MuClient PUBLIC
   $<$<BOOL:${ENABLE_CONTROL_SOCKET}>:${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty>
   $<$<BOOL:${ENABLE_EDITOR}>:${CMAKE_CURRENT_SOURCE_DIR}/MuEditor>
 )
+target_include_directories(MuClient PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/renderdoc")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(MuClient PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 set_source_files_properties(
   "${CMAKE_CURRENT_SOURCE_DIR}/source/Core/Platform/Audio/MiniAudioImpl.cpp"

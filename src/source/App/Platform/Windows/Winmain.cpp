@@ -6,7 +6,7 @@
 #include "Core/Text/Utf8.h"
 #include "App/Platform/DiagnosticFrameCaptureSchedule.h"
 #include "App/Platform/DiagnosticFrameCaptureWriter.h"
-
+#include "App/Platform/RenderDocCapture.h"
 #define WIN32_LEAN_AND_MEAN
 #define WIN32_EXTRA_LEAN
 
@@ -1327,6 +1327,7 @@ void MuApplyWindowResolution(unsigned int width, unsigned int height, bool windo
 MSG MainLoop()
 {
     constexpr auto target_resolution = 1;
+    std::uint64_t renderedFrameCount = 0;
     auto precise = timeBeginPeriod(target_resolution);
 
     HandleFocusChange(Core::Platform::HasSDLWindowInputFocus(SDL_GetWindowFlags(g_sdlWindow)));
@@ -1534,10 +1535,33 @@ MSG MainLoop()
 
                 RequestDiagnosticFrameCapture();
                 ApplyPendingVSyncPreference();
+                const std::uint64_t frameNumber = ++renderedFrameCount;
+                if (SceneFixture::ShouldTriggerCaptureForFrame())
+                {
+                    if (App::Platform::RenderDoc::TriggerCapture())
+                    {
+                        SceneFixture::NotifyCaptureTriggered();
+                        mu::log::Get("capture")->info(
+                            "[SceneFixture] requested RenderDoc capture at frame {}; RenderDoc will capture frame {}",
+                            frameNumber, frameNumber + 1);
+                    }
+                    else
+                    {
+                        SceneFixture::NotifyCaptureSkipped();
+                        mu::log::Get("capture")->info(
+                            "[SceneFixture] RenderDoc is unavailable; automatic capture was skipped");
+                    }
+                }
                 mu::GetRenderer().BeginFrame();
                 RenderScene(g_hDC);
                 mu::GetRenderer().EndFrame();
                 ConsumeDiagnosticFrameCapture();
+                if (SceneFixture::ShouldExitAfterCapturedFrame())
+                {
+                    mu::log::Get("capture")->info(
+                        "[SceneFixture] requesting clean shutdown after capture at frame {}", frameNumber);
+                    PostQuitMessage(0);
+                }
             }
         }
         else

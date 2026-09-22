@@ -20,6 +20,10 @@ void ConfigureFromCommandLine(std::wstring_view commandLine);
 [[nodiscard]] std::optional<TargetWindowSize> GetTargetWindowSize();
 [[nodiscard]] std::optional<float> GetWorldViewportBottomReserve();
 [[nodiscard]] bool IsReady();
+[[nodiscard]] bool ShouldTriggerCaptureForFrame();
+void NotifyCaptureTriggered();
+void NotifyCaptureSkipped();
+[[nodiscard]] bool ShouldExitAfterCapturedFrame();
 [[nodiscard]] const wchar_t* GetId();
 
 void ApplyWorldTime(double& worldTime);

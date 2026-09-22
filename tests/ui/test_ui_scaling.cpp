@@ -104,6 +104,43 @@ TEST_CASE("selected scene fixture fixes its windowed capture target [scene][fixt
     CHECK(UI::Scaling::WorldViewport(800, 600, false).height == 536);
 }
 
+TEST_CASE("scene fixture schedules one capture after readiness [scene][fixture]")
+{
+    constexpr unsigned int warmupFrames = 240;
+
+    SceneFixture::ConfigureFromCommandLine(
+        L"--scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture");
+
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+    CHECK(SceneFixture::ObserveServerSpawn(4, 208, 75));
+    for (unsigned int frame = 0; frame < warmupFrames; ++frame)
+    {
+        CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+    }
+    CHECK(SceneFixture::ShouldTriggerCaptureForFrame());
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    SceneFixture::NotifyCaptureTriggered();
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+
+    SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1 --capture-when-ready");
+    CHECK(SceneFixture::ObserveServerSpawn(4, 208, 75));
+    for (unsigned int frame = 0; frame < warmupFrames; ++frame)
+    {
+        CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+    }
+    CHECK(SceneFixture::ShouldTriggerCaptureForFrame());
+    SceneFixture::NotifyCaptureSkipped();
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1");
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+}
+
 TEST_CASE("teleport layout uses stable width and fits above the dock [ui][scaling]")
 {
     const auto layout = UI::MoveCommand::CalculateLayout(1, 14);
