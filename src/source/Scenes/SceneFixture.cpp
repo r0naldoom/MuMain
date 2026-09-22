@@ -1,7 +1,6 @@
 #include "stdafx.h"
 #include "SceneFixture.h"
 
-#include "Camera/CameraState.h"
 
 namespace
 {
@@ -14,14 +13,6 @@ struct FixtureDefinition
     unsigned char positionX;
     unsigned char positionY;
     double worldTime;
-    float cameraPositionX;
-    float cameraPositionY;
-    float cameraPositionZ;
-    float cameraPitch;
-    float cameraYaw;
-    float cameraRoll;
-    float cameraDistance;
-    float staticObjectLuminosity;
     unsigned int captureAfterReadyFrames;
     unsigned int exitAfterCaptureFrames;
 };
@@ -34,17 +25,9 @@ constexpr FixtureDefinition LOST_TOWER_WALL_V1 = {
     {800, 600},
     48.0f,
     4,
-    208,
-    75,
+    91,
+    183,
     0.0,
-    20800.0f,
-    7500.0f,
-    1300.0f,
-    -48.5f,
-    0.0f,
-    -45.0f,
-    1300.0f,
-    0.7f,
     LOST_TOWER_WALL_WARMUP_FRAMES,
     LOST_TOWER_WALL_POST_CAPTURE_FRAMES,
 };
@@ -169,10 +152,6 @@ bool SceneFixture::ObserveServerSpawn(int map, unsigned char positionX, unsigned
     return s_ready;
 }
 
-bool SceneFixture::IsReady()
-{
-    return s_ready;
-}
 
 bool SceneFixture::ShouldTriggerCaptureForFrame()
 {
@@ -240,27 +219,4 @@ void SceneFixture::ApplyWorldTime(double& worldTime)
     {
         worldTime = LOST_TOWER_WALL_V1.worldTime;
     }
-}
-
-bool SceneFixture::ApplyCameraPose(CameraState& camera)
-{
-    if (!s_ready)
-    {
-        return false;
-    }
-
-    Vector(LOST_TOWER_WALL_V1.cameraPositionX, LOST_TOWER_WALL_V1.cameraPositionY, LOST_TOWER_WALL_V1.cameraPositionZ,
-           camera.Position);
-    Vector(LOST_TOWER_WALL_V1.cameraPitch, LOST_TOWER_WALL_V1.cameraYaw, LOST_TOWER_WALL_V1.cameraRoll, camera.Angle);
-    camera.Distance = LOST_TOWER_WALL_V1.cameraDistance;
-    camera.DistanceTarget = LOST_TOWER_WALL_V1.cameraDistance;
-    camera.CustomDistance = 0.0f;
-    camera.TopViewEnable = false;
-    camera.UpdateMatrix();
-    return true;
-}
-
-float SceneFixture::GetFixedStaticObjectLuminosity()
-{
-    return LOST_TOWER_WALL_V1.staticObjectLuminosity;
 }

@@ -142,32 +142,48 @@ Linux client did not forward `argv`; keep its compatibility patch local and
 version it with the comparison fixture rather than changing its tracked
 history.
 
-`lost-tower-wall-v1` pins the current client to a windowed `800×600` target, Lost
-Tower map `4`, grid position `(208, 75)`, and a fixed post-update Default-camera
-pose. The fixture applies its target after loading `config.ini` and before SDL
-creates the window, so a saved fullscreen or display resolution cannot alter a
-capture. Its world viewport reserves the legacy `48` reference pixels rather
-than the gameplay HUD's `51`; this fixture-only override removes a known
-geometric delta from cross-build material comparisons and is not a judgment on
-the new HUD design. The historical client already reserves `48` reference
-pixels, and its local comparison patch MUST apply the same windowed target. The
-position is the center of MuGold's existing Lost Tower safe-zone gate
-(`203..213`, `70..81`); no MuGold source change is required. Configure the
-dedicated fixture character's persisted map and position externally, without
-committing credentials.
+`lost-tower-wall-v1` pins the current client to a windowed `800×600` target,
+Lost Tower map `4`, and grid position `(91, 183)`. The fixture applies its
+target after loading `config.ini` and before SDL creates the window, so a saved
+fullscreen or display resolution cannot alter a capture. Its world viewport
+reserves the legacy `48` reference pixels rather than the gameplay HUD's `51`;
+this fixture-only override removes a known geometric delta from cross-build
+material comparisons and is not a judgment on the new HUD design. The
+historical client already reserves `48` reference pixels, and its local
+comparison patch MUST apply the same windowed target.
+
+Place the dedicated fixture character on map `4`, grid `(91, 183)`, before a
+parity run. Run the placement update while the client is closed: it otherwise
+saves its in-memory position on logout and overwrites the database value. The
+following SQL is a template; substitute the dedicated character name and keep
+credentials and local paths out of tracked documentation:
+
+```sql
+UPDATE data."Character" SET "PositionX" = 91, "PositionY" = 183
+WHERE "Name" = '<fixture-character>';
+SELECT "Name", "PositionX", "PositionY" FROM data."Character"
+WHERE "Name" = '<fixture-character>';
+```
+
+Because version 1 does not set camera state in-process, verify before each
+capture pair that both builds have the same `[Camera] Zoom` value in
+`config.ini`. The reference pair uses `Zoom=1735`; recheck it after any manual
+zoom or configuration change and record the value with the capture result.
 
 The fixture becomes ready only after the server's join or revival packet
 reports exactly that map and position. A mismatch emits `[SceneFixture] ... is
-not ready`; the client retains its ordinary camera and `rand()` brightness
-path, so a capture cannot be reported as fixture-ready accidentally.
+not ready`; readiness gates only the automatic capture scheduler, so a capture
+cannot be reported as fixture-ready accidentally.
 
-While selected, the fixture freezes the clock around the main-scene update, where
-Lost Tower derives static-object texture coordinates. It restores wall-clock
-time before reconnect/network work, then freezes the render clock again. Once
-ready, the camera is applied after the active camera's normal update and its
-frustum is rebuilt. Lost Tower static-object brightness uses a fixed fixture
-value instead of calling `rand()`; this does not call `srand()` or reseed the
-process-wide random generator.
+While selected, the fixture freezes the clock around the main-scene update,
+where Lost Tower derives static-object texture coordinates. It restores
+wall-clock time before reconnect/network work, then freezes the render clock
+again. Version 1 deliberately does not override the camera or static-object
+luminosity: reproducible camera state comes from the positioned, stationary
+character. The legacy comparison patch removes its former fixture-only
+brightness pin, keeping its ordinary `rand()` path aligned with the current
+client after #609 and avoiding a fixture-introduced random-number consumption
+difference.
 
 `--capture-when-ready` is opt-in; without it, the fixture leaves RenderDoc's
 manual F12 capture unchanged. With it, the fixture waits 240 rendered frames

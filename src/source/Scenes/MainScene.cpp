@@ -9,7 +9,6 @@
 #include "UI/Chat/Chat.h"
 #include "MainScene.h"
 #include "SceneCommon.h"
-#include "SceneFixture.h"
 #include "Camera/CameraUtility.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Engine/Object/ZzzObject.h"
@@ -707,10 +706,6 @@ bool RenderMainScene()
     }
 #endif
 
-    if (SceneFixture::IsReady() && CameraManager::Instance().GetCurrentMode() != CameraMode::Default)
-    {
-        CameraManager::Instance().SetCameraMode(CameraMode::Default);
-    }
 
     vec3_t cameraPos;
     int width, height;
