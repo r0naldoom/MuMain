@@ -112,8 +112,8 @@ TEST_CASE("scene fixture schedules one capture after readiness [scene][fixture]"
         L"--scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture");
 
     CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
-    CHECK_FALSE(SceneFixture::ObserveServerSpawn(4, 208, 75));
-    CHECK(SceneFixture::ObserveServerSpawn(4, 91, 183));
+    CHECK_FALSE(SceneFixture::ObserveServerSpawn(4, 91, 183));
+    CHECK(SceneFixture::ObserveServerSpawn(4, 213, 72));
     for (unsigned int frame = 0; frame < warmupFrames; ++frame)
     {
         CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
@@ -129,7 +129,7 @@ TEST_CASE("scene fixture schedules one capture after readiness [scene][fixture]"
     CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
 
     SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1 --capture-when-ready");
-    CHECK(SceneFixture::ObserveServerSpawn(4, 91, 183));
+    CHECK(SceneFixture::ObserveServerSpawn(4, 213, 72));
     for (unsigned int frame = 0; frame < warmupFrames; ++frame)
     {
         CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());

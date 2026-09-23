@@ -143,7 +143,13 @@ version it with the comparison fixture rather than changing its tracked
 history.
 
 `lost-tower-wall-v1` pins the current client to a windowed `800×600` target,
-Lost Tower map `4`, and grid position `(91, 183)`. The fixture applies its
+Lost Tower map `4`, and grid position `(213, 72)`. The position lies inside the
+Lost Tower safe zone, where the client terrain attribute `0x01` covers x
+`198..213` and y `70..75`; monsters neither enter nor attack there, which keeps
+combat lighting out of the scene (see "Dynamic light reaches the anchor"
+below). The south wall (y `69`) and the east wall (x `214..215`) meet at
+`(214, 69)`, next to the position, so the Default camera frames that wall
+corner instead of open floor. The fixture applies its
 target after loading `config.ini` and before SDL creates the window, so a saved
 fullscreen or display resolution cannot alter a capture. Its world viewport
 reserves the legacy `48` reference pixels rather than the gameplay HUD's `51`;
@@ -152,14 +158,14 @@ material comparisons and is not a judgment on the new HUD design. The
 historical client already reserves `48` reference pixels, and its local
 comparison patch MUST apply the same windowed target.
 
-Place the dedicated fixture character on map `4`, grid `(91, 183)`, before a
+Place the dedicated fixture character on map `4`, grid `(213, 72)`, before a
 parity run. Run the placement update while the client is closed: it otherwise
 saves its in-memory position on logout and overwrites the database value. The
 following SQL is a template; substitute the dedicated character name and keep
 credentials and local paths out of tracked documentation:
 
 ```sql
-UPDATE data."Character" SET "PositionX" = 91, "PositionY" = 183
+UPDATE data."Character" SET "PositionX" = 213, "PositionY" = 72
 WHERE "Name" = '<fixture-character>';
 SELECT "Name", "PositionX", "PositionY" FROM data."Character"
 WHERE "Name" = '<fixture-character>';
@@ -180,10 +186,29 @@ where Lost Tower derives static-object texture coordinates. It restores
 wall-clock time before reconnect/network work, then freezes the render clock
 again. Version 1 deliberately does not override the camera or static-object
 luminosity: reproducible camera state comes from the positioned, stationary
-character. The legacy comparison patch removes its former fixture-only
-brightness pin, keeping its ordinary `rand()` path aligned with the current
-client after #609 and avoiding a fixture-introduced random-number consumption
-difference.
+character. The legacy comparison patch drops the unused `rand()` brightness
+value from the Lost Tower static-object branch, as #609 did in the current
+client. Both clients seed `rand()` from wall-clock time at startup, so random
+sequences differ between launches regardless of how many values either build
+consumes; aligning random consumption cannot make a capture reproducible.
+
+#### Dynamic light reaches the anchor
+
+The `mu.scene.static-objects.complete` anchor precedes the character and effect
+passes, so monsters, skills, and effects are not drawn into the anchored render
+target. Their light is. Effects add dynamic terrain light while they move, before
+the scene renders, and that light tints both the terrain and every static object
+standing in it. A monster attack near the fixture can therefore turn part of the
+wall orange at the anchor while no monster pixel appears there.
+
+Two legacy-client captures taken at grid `(91, 183)`, outside the safe zone,
+differed in 8.4% of the wall region. In the later launch monsters had reached
+the character and a combat effect above one wall section was lighting it; the
+earlier launch had neither. The affected pixels came from the same draws at the
+same depths, with red and green raised and blue unchanged.
+
+Before accepting a capture, export its final render target and confirm that no
+monster, skill, or other effect is active near the measured region.
 
 `--capture-when-ready` is opt-in; without it, the fixture leaves RenderDoc's
 manual F12 capture unchanged. With it, the fixture waits 240 rendered frames

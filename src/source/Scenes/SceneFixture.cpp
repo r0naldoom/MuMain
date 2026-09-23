@@ -25,8 +25,11 @@ constexpr FixtureDefinition LOST_TOWER_WALL_V1 = {
     {800, 600},
     48.0f,
     4,
-    91,
-    183,
+    // Inside the Lost Tower safe zone (terrain attribute 0x01 covers x 198..213, y 70..75): monsters neither enter
+    // nor attack there, so no combat effect can add dynamic light to the captured terrain and static objects. The
+    // south (y 69) and east (x 214..215) walls meet at (214, 69), so the default camera frames that wall corner.
+    213,
+    72,
     0.0,
     LOST_TOWER_WALL_WARMUP_FRAMES,
     LOST_TOWER_WALL_POST_CAPTURE_FRAMES,
