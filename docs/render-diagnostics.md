@@ -172,6 +172,31 @@ actual draw sequence.
 | Legacy raw draw sites | 6 (`glDraw*`); plus 11 terrain `glBegin` sites | `a410f3de:src/source/Render/RHI/RHI_GL.cpp`, `Render/Models/ZzzBMD.cpp`, `Render/Terrain/ZzzLodTerrain.cpp` |
 | #621 capture range | approximately 500--2500 relevant draw events/frame | capture investigation record |
 
+## Live counter probe
+
+A counter that does not move under a change we cause on purpose is not a probe,
+so `stats` was accepted against the running client rather than against its unit
+test. Lorencia, the current SDL GPU renderer, `testgmDw`:
+
+```
+frame advances            frame 490 -> 611 -> 733 -> 852 (median ~59.5 fps)
+baseline                  requested=3300 submitted=2561 replayed=2579
+draw-filter blend=false   requested=3439 submitted=1229 replayed=2588
+draw-filter clear         requested=3587 submitted=2569 replayed=2587
+```
+
+Three things worth keeping from this:
+
+- `submitted` more than halves under the filter and comes back when it is
+  cleared, so the counter reports what the GPU was actually asked to draw.
+- `replayed` does not move, because `s_dbgRenderCmdsReplayedThisFrame` counts
+  commands entering the replay loop and the filter drops them one level below,
+  at the top of `ReplayDrawCommand`. Filtering measures submission, not recording.
+- The first read after entering the world reported `frame 389 -> 390` across a
+  whole second. That is the map-load stall, not a frozen snapshot: a sweep has
+  to let the scene settle before it samples, or it will compare a loading frame
+  against a running one.
+
 ## Implementation boundaries
 
 The console command and draw filter should each be a deep module with one small
