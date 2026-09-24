@@ -90,6 +90,12 @@ TEST_CASE("selected scene fixture fixes its windowed capture target [scene][fixt
         CHECK(targetWindowSize->width == 800);
         CHECK(targetWindowSize->height == 600);
     }
+    const auto randomSeed = SceneFixture::GetRandomSeed();
+    CHECK(randomSeed.has_value());
+    if (randomSeed)
+    {
+        CHECK(*randomSeed == 20260924u);
+    }
     const auto worldBottomReserve = SceneFixture::GetWorldViewportBottomReserve();
     CHECK(worldBottomReserve.has_value());
     if (worldBottomReserve)
@@ -100,6 +106,7 @@ TEST_CASE("selected scene fixture fixes its windowed capture target [scene][fixt
 
     SceneFixture::ConfigureFromCommandLine(L"");
     CHECK_FALSE(SceneFixture::GetTargetWindowSize().has_value());
+    CHECK_FALSE(SceneFixture::GetRandomSeed().has_value());
     CHECK_FALSE(SceneFixture::GetWorldViewportBottomReserve().has_value());
     CHECK(UI::Scaling::WorldViewport(800, 600, false).height == 536);
 }

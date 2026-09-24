@@ -2229,7 +2229,8 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     timers.SetRepeating(MUHELPER_TIMER, 250 /* ms */,
                         [] { MUHelper::CMuHelper::TimerProc(nullptr, 0, MUHELPER_TIMER, 0); });
 
-    srand((unsigned)time(nullptr));
+    // A scene fixture pins the seed so object lighting loads identically in every run; see SceneFixture.cpp.
+    srand(SceneFixture::GetRandomSeed().value_or(static_cast<unsigned>(time(nullptr))));
 
     for (int& i : RandomTable)
         i = rand() % 360;

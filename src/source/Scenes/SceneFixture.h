@@ -18,6 +18,7 @@ void ConfigureFromCommandLine(std::wstring_view commandLine);
 [[nodiscard]] bool ObserveServerSpawn(int map, unsigned char positionX, unsigned char positionY);
 [[nodiscard]] std::optional<TargetWindowSize> GetTargetWindowSize();
 [[nodiscard]] std::optional<float> GetWorldViewportBottomReserve();
+[[nodiscard]] std::optional<unsigned int> GetRandomSeed();
 [[nodiscard]] bool ShouldTriggerCaptureForFrame();
 void NotifyCaptureTriggered();
 void NotifyCaptureSkipped();

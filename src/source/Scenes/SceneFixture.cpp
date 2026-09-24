@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "SceneFixture.h"
 
+#include <cstdlib>
+
 
 namespace
 {
@@ -17,6 +19,11 @@ struct FixtureDefinition
     unsigned int exitAfterCaptureFrames;
 };
 
+// The client seeds the RNG from the clock, and object lighting reads it while the map loads: the crystal caps on
+// the Lost Tower pillars come out at a different brightness in every run. Two captures of the same build differed
+// on 0.31% of the frame, in ten blobs sitting exactly on the two pillar rows, one of them swinging a channel by 188
+// of 255. A fixed seed removes that whole class of noise from a parity run; both builds must use the same value.
+constexpr unsigned int LOST_TOWER_WALL_RANDOM_SEED = 20260924u;
 constexpr unsigned int LOST_TOWER_WALL_WARMUP_FRAMES = 240;
 constexpr unsigned int LOST_TOWER_WALL_POST_CAPTURE_FRAMES = 2;
 
@@ -152,6 +159,14 @@ bool SceneFixture::ObserveServerSpawn(int map, unsigned char positionX, unsigned
 
     const bool ready = map == LOST_TOWER_WALL_V1.map && positionX == LOST_TOWER_WALL_V1.positionX &&
                        positionY == LOST_TOWER_WALL_V1.positionY;
+    if (ready && !s_ready)
+    {
+        // Seeding at startup is not enough: the number of frames spent on the login and character scenes varies,
+        // and every rand() consumed there shifts the stream. Re-seeding the moment the fixture becomes ready makes
+        // the frames that follow consume the same values in every run, on both builds.
+        srand(LOST_TOWER_WALL_RANDOM_SEED);
+    }
+
     if (ready && !s_ready && s_captureStage == CaptureStage::Waiting)
     {
         s_readyFrameCount = 0;
@@ -161,6 +176,16 @@ bool SceneFixture::ObserveServerSpawn(int map, unsigned char positionX, unsigned
     return s_ready;
 }
 
+
+std::optional<unsigned int> SceneFixture::GetRandomSeed()
+{
+    if (!s_active)
+    {
+        return std::nullopt;
+    }
+
+    return LOST_TOWER_WALL_RANDOM_SEED;
+}
 
 bool SceneFixture::ShouldTriggerCaptureForFrame()
 {
