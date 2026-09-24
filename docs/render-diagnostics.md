@@ -197,6 +197,37 @@ Three things worth keeping from this:
   to let the scene settle before it samples, or it will compare a loading frame
   against a running one.
 
+## Thirty-map counter sweep
+
+The counters were then read on every map the server can place a character on and
+the client can load: thirty maps, one client process each, the character moved
+between them by SQL with the client closed. Two identities held exactly on all
+thirty:
+
+```
+requested == merged + submitted              every map, no residue
+geometry  == submitted + dropped + filtered  every map, no residue
+```
+
+The first one settles what the submitted-per-requested ratio measures. It ranges
+from 0.139 on Kanturu Event to 0.769 on Lost Tower against a 0.52 median, and the
+whole spread is merging: Kanturu Event merged 2615 of 3036 requested draws. The
+ratio carries no defect signal, so nothing should be built on it.
+
+The second identity had to be created. Before it, a draw that the replay loop
+walks and then abandons at the bind guard could only be seen as
+`replayed - submitted`, and that difference also counts the loop's SetViewport,
+SetScissor and DebugLabel commands. It measured exactly 18 on all thirty maps --
+indistinguishable from a permanent silent drop of 18 objects. Splitting geometry
+commands from dropped and filtered ones resolved it: the 18 are state commands,
+`dropped` is zero, and `geometry == submitted` on both a median map and the
+extreme outlier.
+
+A dropped draw is worth its own counter because nothing else reports one. The
+texture lookup succeeds when the command is recorded, so `fallbackTextureDraws`
+stays silent while the object is absent from the frame -- a visual defect with no
+crash and no failing test, which is the class #547 warned would come back.
+
 ## Implementation boundaries
 
 The console command and draw filter should each be a deep module with one small
