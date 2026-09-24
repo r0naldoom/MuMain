@@ -25,6 +25,11 @@ struct SDL_GPUDevice;
 struct TTF_TextEngine;
 struct TTF_Font;
 
+namespace Render
+{
+struct DrawFilter;
+}
+
 namespace mu
 {
 
@@ -202,6 +207,9 @@ public:
     virtual void SetCullFace(bool /*enabled*/) {}
     virtual void SetAlphaTest(bool /*enabled*/) {}
     virtual void SetTexture2D(bool /*enabled*/) {}
+
+    // Suppresses recorded SDL GPU geometry selected by an immutable diagnostic predicate.
+    virtual void SetDrawFilter(const Render::DrawFilter& /*filter*/) {}
     virtual void SetFogEnabled(bool /*enabled*/) {}
 
     // Bind texture by game bitmap index. SDL_gpu resolves this to SDL_GPUTexture*

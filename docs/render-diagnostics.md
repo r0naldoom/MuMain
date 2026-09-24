@@ -1,6 +1,6 @@
 # Render Diagnostics
 
-> **Status:** the `console` control is implemented. The draw filter remains a design baseline.
+> **Status:** the `console` control and SDL GPU draw filter are implemented.
 
 ## Purpose
 
@@ -102,53 +102,31 @@ normal replay pass and editor offscreen capture replay call it. Filtering there
 covers every effective SDL GPU geometric draw while avoiding six producer hooks.
 It also deliberately observes post-merge commands.
 
-### Proposed interface
+### Control interface
 
-The external control is a frame-scoped predicate with all clauses optional:
+`draw-filter` installs one immutable AND predicate for subsequent frame replay:
 
 ```json
-{
-  "cmd":"draw-filter",
-  "disable": {
-    "submitted_ordinal":{"first":120,"last":240},
-    "texture_id":12778,
-    "texture_size":{"width":16,"height":16},
-    "blend":{"enabled":false,"mode":"alpha"}
-  }
-}
+{"cmd":"draw-filter","texture_id":12778,"texture_width":16,"texture_height":16,"blend":false}
 ```
 
-A draw matches only when every supplied clause matches. The default is disabled;
-clearing the filter restores unmodified replay. The request names
-`submitted_ordinal` specifically so callers do not mistake it for a RenderDoc
-EID. Range bounds are inclusive.
-
-The JSON shape is a proposal, not an implemented control-socket contract. It
-must retain one explicit choice before implementation: whether several filters
-combine as OR rules or whether one request creates one AND predicate. The shape
-above describes the latter because it makes a live bisection unambiguous.
+Every supplied clause must match: `texture_id`, the paired
+`texture_width`/`texture_height`, `blend`, and inclusive
+`submitted_ordinal_first`/`submitted_ordinal_last`. The ordinal is a fallback
+for blind bisection, never a RenderDoc EID. `{"cmd":"draw-filter","clear":true}`
+removes the predicate and restores unmodified replay.
 
 ### Information required at the seam
 
-`RenderCmd` already snapshots type, pipeline, texture pointer, sampler, vertex
-and index ranges, viewport/scissor, and some blend/depth/cull state. It is
-sufficient for:
+`RenderCmd` snapshots the resolved logical texture ID, dimensions, blend state,
+and geometry ranges at recording time. The texture registry stores
+`{void*, width, height}` behind each logical ID; the one-entry lookup cache
+returns the same POD already needed to resolve the GPU texture. `GlobalBitmap`
+registers its source dimensions, while dynamic textures retain dimensions from
+`EnsureTexture`.
 
-- a submitted ordinal generated in replay;
-- type, pipeline, texture-pointer, and geometry-range predicates;
-- blend predicates for ordinary text, 2D-quad, triangle, and 3D-quad commands.
-
-It is insufficient for the full proposed interface:
-
-- no logical texture ID is stored in `RenderCmd`;
-- no texture width or height is stored in `RenderCmd`;
-- skinned-triangle and quad-strip producers do not snapshot the explicit
-  blend/depth/cull fields, even though their selected pipeline embodies state.
-
-Therefore a complete filter needs command metadata captured at recording time:
-logical texture ID, texture dimensions when known, and consistent state
-snapshots for every geometry producer. A raw `SDL_GPUTexture*` must not become
-the socket protocol.
+The replay seam uses only this compact metadata and an incrementing submitted
+ordinal. It never exposes a raw `SDL_GPUTexture*` through the socket protocol.
 
 ### Cost model
 

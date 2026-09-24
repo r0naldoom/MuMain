@@ -8,6 +8,8 @@
 #include "Network/Server/WSclient.h"
 #include "Scenes/SceneCore.h"
 #include "Scenes/SceneManager.h"
+#include "Render/Renderer/DrawFilter.h"
+#include "Render/Renderer/MuRenderer.h"
 
 #include "json.hpp"
 
@@ -413,6 +415,61 @@ std::string Ping(const Request& request, std::unique_ptr<Act>&)
     result["build"] = BuildIdentifier();
     result["scene"] = CurrentSceneName();
     return EncodeResult(request.EncodedId(), result.dump());
+}
+
+std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
+{
+    bool clear = false;
+    if (request.GetBool("clear", clear) && clear)
+    {
+        mu::GetRenderer().SetDrawFilter({});
+        return EncodeResult(request.EncodedId(), R"({"enabled":false})");
+    }
+
+    Render::DrawFilter filter{};
+    filter.enabled = true;
+    int value = 0;
+    if (request.GetInt("texture_id", value))
+    {
+        if (value < 0)
+            return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "texture_id must be non-negative");
+        filter.hasTextureId = true;
+        filter.textureId = static_cast<std::uint32_t>(value);
+    }
+    int width = 0;
+    int height = 0;
+    const bool hasWidth = request.GetInt("texture_width", width);
+    const bool hasHeight = request.GetInt("texture_height", height);
+    if (hasWidth != hasHeight || (hasWidth && (width <= 0 || height <= 0)))
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "texture_size needs positive width and height");
+    if (hasWidth)
+    {
+        filter.hasTextureSize = true;
+        filter.textureWidth = static_cast<std::uint32_t>(width);
+        filter.textureHeight = static_cast<std::uint32_t>(height);
+    }
+    if (request.GetBool("blend", filter.blendEnabled))
+        filter.hasBlend = true;
+    if (request.GetInt("submitted_ordinal_first", value))
+    {
+        if (value < 0)
+            return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "submitted ordinal must be non-negative");
+        filter.firstSubmittedOrdinal = static_cast<std::uint32_t>(value);
+        filter.lastSubmittedOrdinal = filter.firstSubmittedOrdinal;
+        filter.hasSubmittedOrdinal = true;
+    }
+    if (request.GetInt("submitted_ordinal_last", value))
+    {
+        if (value < 0 || (filter.hasSubmittedOrdinal && static_cast<std::uint32_t>(value) < filter.firstSubmittedOrdinal))
+            return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "submitted ordinal range is invalid");
+        filter.lastSubmittedOrdinal = static_cast<std::uint32_t>(value);
+        filter.hasSubmittedOrdinal = true;
+    }
+    if (!filter.hasTextureId && !filter.hasTextureSize && !filter.hasBlend && !filter.hasSubmittedOrdinal)
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "draw-filter needs a clause or clear");
+
+    mu::GetRenderer().SetDrawFilter(filter);
+    return EncodeResult(request.EncodedId(), R"({"enabled":true})");
 }
 
 std::string Scene(const Request& request, std::unique_ptr<Act>&)

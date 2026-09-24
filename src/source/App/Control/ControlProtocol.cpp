@@ -194,7 +194,7 @@ const std::vector<std::string>& CommandNames()
     static const std::vector<std::string> names = {
         "ping",   "scene", "state",   "nearby", "events",   "wait-for", "screenshot", "login",  "select-char",
         "logout", "quit",  "move",    "warp",   "teleport", "attack",   "skill",      "pickup", "use",
-        "equip",  "say",   "console", "whisper", "party",   "halt",     "hotkey",     "click-ui",
+        "equip",  "say",   "console", "draw-filter", "whisper", "party",   "halt",     "hotkey",     "click-ui",
     };
     return names;
 }

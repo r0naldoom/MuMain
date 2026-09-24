@@ -33,6 +33,7 @@
 
 #include "D3D12Diagnostics.h"
 #include "DrawCommandHistory.h"
+#include "DrawFilter.h"
 #include "MuRenderer.h"
 #include "QuadTopology.h"
 #include "SdlGpuPixelFormat.h"
@@ -555,6 +556,9 @@ struct RenderCmd
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUTexture* texture;
     SDL_GPUSampler* sampler;
+    std::uint32_t textureId;
+    std::uint32_t textureWidth;
+    std::uint32_t textureHeight;
     Uint32 vtxOffset;
     Uint32 vtxCount;       // for DrawTriangles
     Uint32 idxCount;       // for DrawIndexed*
@@ -580,6 +584,7 @@ struct RenderCmd
 static std::vector<RenderCmd> s_renderCmds;
 static constexpr std::size_t kNoDrawCommand = std::numeric_limits<std::size_t>::max();
 static Render::DrawCommandHistory s_previousDrawCommands;
+static Render::DrawFilter s_drawFilter;
 
 constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-objects.complete";
 
@@ -792,9 +797,15 @@ static void BindReplayIndexBuffer(SDL_GPUBuffer* buffer, Uint32 offset, SDL_GPUI
     SDL_BindGPUIndexBuffer(s_renderPass, &indexBinding, elementSize);
 }
 
-static void ReplayDrawCommand(const RenderCmd& command, bool boneDataReady, const SDL_Rect& scissor,
-                              Render::SdlGpuReplayState& state)
+static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedOrdinal, bool boneDataReady,
+                              const SDL_Rect& scissor, Render::SdlGpuReplayState& state)
 {
+    if (s_drawFilter.Matches(
+            {submittedOrdinal, command.textureId, command.textureWidth, command.textureHeight, command.blendEnabled}))
+    {
+        return;
+    }
+
     const bool skinned = command.type == RenderCmdType::DrawSkinnedTriangles;
     if (!command.texture || !command.sampler || (skinned && (!boneDataReady || !s_boneGpuBuf)) ||
         !BindReplayPipeline(command, state, scissor))
@@ -1097,11 +1108,17 @@ static void WarmTtfFonts()
 // TextureRegistry: maps caller-provided uint32_t ids to SDL_GPUTexture*.
 // Accessible from test TU via forward declarations in mu namespace.
 // ---------------------------------------------------------------------------
-static std::unordered_map<std::uint32_t, void*> s_textureMap;
-static std::unordered_map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> s_textureSizes;
+struct TextureRecord
+{
+    void* texture = nullptr;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+};
+
+static std::unordered_map<std::uint32_t, TextureRecord> s_textureMap;
 static std::unordered_set<std::uint32_t> s_ownedTextureIds;
 static std::uint32_t s_cachedTextureId = 0u;
-static void* s_cachedTexture = nullptr;
+static TextureRecord s_cachedTexture;
 static bool s_textureCacheValid = false;
 constexpr std::uint32_t kFirstOwnedDynamicTextureId = 0x60000000u;
 constexpr std::uint32_t kLastOwnedDynamicTextureId = 0x7FFFFFFFu;
@@ -1134,18 +1151,23 @@ static bool s_texturesInvalidated = false;
 // without requiring SDL3 headers. The actual stored type is SDL_GPUTexture*.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] void* LookupTexture(std::uint32_t id)
+[[nodiscard]] static TextureRecord LookupTextureRecord(std::uint32_t id)
 {
     if (s_textureCacheValid && s_cachedTextureId == id)
     {
         return s_cachedTexture;
     }
 
-    auto it = s_textureMap.find(id);
+    const auto it = s_textureMap.find(id);
     s_cachedTextureId = id;
-    s_cachedTexture = it != s_textureMap.end() ? it->second : nullptr;
+    s_cachedTexture = it != s_textureMap.end() ? it->second : TextureRecord{};
     s_textureCacheValid = true;
     return s_cachedTexture;
+}
+
+[[nodiscard]] void* LookupTexture(std::uint32_t id)
+{
+    return LookupTextureRecord(id).texture;
 }
 
 static void InvalidateTextureLookupCache()
@@ -1153,16 +1175,16 @@ static void InvalidateTextureLookupCache()
     s_textureCacheValid = false;
 }
 
-[[nodiscard]] static void* LookupTextureForDraw(std::uint32_t id)
+[[nodiscard]] static TextureRecord LookupTextureForDraw(std::uint32_t id)
 {
-    void* texture = LookupTexture(id);
-    if (texture)
+    TextureRecord texture = LookupTextureRecord(id);
+    if (texture.texture)
     {
         return texture;
     }
 
     ++s_dbgFallbackTextureThisFrame;
-    return s_whiteTexture;
+    return {s_whiteTexture, 1u, 1u};
 }
 
 static void DiscardQueuedTextureUpdates(void* texture)
@@ -1188,17 +1210,17 @@ static bool ReleaseOwnedTextureById(std::uint32_t id)
     auto texture = s_textureMap.find(id);
     if (texture != s_textureMap.end())
     {
-        DiscardQueuedTextureUpdates(texture->second);
-        if (s_device && texture->second)
+        DiscardQueuedTextureUpdates(texture->second.texture);
+        if (s_device && texture->second.texture)
         {
-            SDL_ReleaseGPUTexture(s_device, static_cast<SDL_GPUTexture*>(texture->second));
+            SDL_ReleaseGPUTexture(s_device, static_cast<SDL_GPUTexture*>(texture->second.texture));
             ++s_dbgTextureReleasesThisFrame;
         }
         s_textureMap.erase(texture);
         InvalidateTextureLookupCache();
     }
 
-    s_textureSizes.erase(id);
+    s_ownedTextureIds.erase(owned);
     s_ownedTextureIds.erase(owned);
     s_texturesInvalidated = true;
     return true;
@@ -1212,11 +1234,13 @@ static void ReleaseOwnedTextures()
     }
 }
 
-void RegisterTexture(std::uint32_t id, void* pTex)
+void RegisterTexture(std::uint32_t id, void* texture, std::uint32_t width, std::uint32_t height)
 {
+    const TextureRecord registered{texture, width, height};
     auto existing = s_textureMap.find(id);
-    if (existing != s_textureMap.end() && existing->second == pTex)
+    if (existing != s_textureMap.end() && existing->second.texture == texture)
     {
+        existing->second = registered;
         return;
     }
 
@@ -1224,13 +1248,12 @@ void RegisterTexture(std::uint32_t id, void* pTex)
     existing = s_textureMap.find(id);
     if (existing != s_textureMap.end())
     {
-        DiscardQueuedTextureUpdates(existing->second);
+        DiscardQueuedTextureUpdates(existing->second.texture);
         s_texturesInvalidated = true;
     }
 
-    s_textureMap[id] = pTex;
+    s_textureMap[id] = registered;
     InvalidateTextureLookupCache();
-    s_textureSizes.erase(id);
 }
 
 void UnregisterTexture(std::uint32_t id)
@@ -1243,11 +1266,10 @@ void UnregisterTexture(std::uint32_t id)
     auto texture = s_textureMap.find(id);
     if (texture != s_textureMap.end())
     {
-        DiscardQueuedTextureUpdates(texture->second);
+        DiscardQueuedTextureUpdates(texture->second.texture);
     }
     s_textureMap.erase(id);
     InvalidateTextureLookupCache();
-    s_textureSizes.erase(id);
     s_ownedTextureIds.erase(id);
     // Mark that GPU resources were freed — deferred commands may hold dangling pointers.
     s_texturesInvalidated = true;
@@ -1259,7 +1281,6 @@ void ClearTextureRegistry()
     ReleaseOwnedTextures();
     s_textureMap.clear();
     InvalidateTextureLookupCache();
-    s_textureSizes.clear();
     if (hadTextures)
     {
         s_texturesInvalidated = true;
@@ -1979,11 +2000,10 @@ public:
         if (s_pendingFrameCaptureTextureId != 0u)
         {
             const auto texture = s_textureMap.find(s_pendingFrameCaptureTextureId);
-            const auto size = s_textureSizes.find(s_pendingFrameCaptureTextureId);
-            if (texture != s_textureMap.end() && size != s_textureSizes.end() && size->second.first == s_swapW &&
-                size->second.second == s_swapH)
+            if (texture != s_textureMap.end() && texture->second.width == s_swapW &&
+                texture->second.height == s_swapH)
             {
-                reconnectCaptureTexture = static_cast<SDL_GPUTexture*>(texture->second);
+                reconnectCaptureTexture = static_cast<SDL_GPUTexture*>(texture->second.texture);
             }
             s_pendingFrameCaptureTextureId = 0u;
         }
@@ -2028,6 +2048,7 @@ public:
 
             // Replay state and editor commands after texture invalidation, but skip
             // game draws because their deferred texture pointers may be dangling.
+            std::uint32_t submittedOrdinal = 0u;
             Render::SdlGpuReplayState replayState;
             for (const auto& cmd : s_renderCmds)
             {
@@ -2090,7 +2111,7 @@ public:
                 case RenderCmdType::DrawIndexedStrip:
                 case RenderCmdType::DrawTriangles2D:
                 {
-                    ReplayDrawCommand(cmd, boneDataReady, s_currentScissor, replayState);
+                    ReplayDrawCommand(cmd, submittedOrdinal++, boneDataReady, s_currentScissor, replayState);
                     break;
                 }
                 } // switch
@@ -2694,8 +2715,7 @@ public:
                 return;
             }
 
-            auto sizeIt = s_textureSizes.find(textureId);
-            if (sizeIt != s_textureSizes.end() && sizeIt->second.first == width && sizeIt->second.second == height)
+            if (existing->second.width == width && existing->second.height == height)
             {
                 return;
             }
@@ -2721,9 +2741,8 @@ public:
             return;
         }
 
-        s_textureMap[textureId] = texture;
+        s_textureMap[textureId] = {texture, width, height};
         InvalidateTextureLookupCache();
-        s_textureSizes[textureId] = {width, height};
         s_ownedTextureIds.insert(textureId);
         ++s_dbgTextureCreatesThisFrame;
     }
@@ -2756,8 +2775,7 @@ public:
                 return;
             }
 
-            auto sizeIt = s_textureSizes.find(textureId);
-            if (sizeIt != s_textureSizes.end() && sizeIt->second.first == width && sizeIt->second.second == height)
+            if (existing->second.width == width && existing->second.height == height)
             {
                 return;
             }
@@ -2783,9 +2801,8 @@ public:
             return;
         }
 
-        s_textureMap[textureId] = texture;
+        s_textureMap[textureId] = {texture, width, height};
         InvalidateTextureLookupCache();
-        s_textureSizes[textureId] = {width, height};
         s_ownedTextureIds.insert(textureId);
         ++s_dbgTextureCreatesThisFrame;
     }
@@ -2850,7 +2867,7 @@ public:
     [[nodiscard]] void* GetTexturePointer(std::uint32_t textureId) const override
     {
         const auto it = s_textureMap.find(textureId);
-        return it != s_textureMap.end() ? it->second : nullptr;
+        return it != s_textureMap.end() ? it->second.texture : nullptr;
     }
 
     [[nodiscard]] bool HasPendingOffscreenCaptures() const override
@@ -2885,12 +2902,12 @@ public:
 
         if (textureId != 0u)
         {
-            const auto size = s_textureSizes.find(textureId);
-            if (!s_ownedTextureIds.contains(textureId) || size == s_textureSizes.end())
+            const auto texture = s_textureMap.find(textureId);
+            if (!s_ownedTextureIds.contains(textureId) || texture == s_textureMap.end())
             {
                 textureId = 0u;
             }
-            else if (size->second.first != s_swapW || size->second.second != s_swapH)
+            else if (texture->second.width != s_swapW || texture->second.height != s_swapH)
             {
                 ReleaseOwnedTextureById(textureId);
                 textureId = 0u;
@@ -2915,9 +2932,8 @@ public:
                 return 0u;
             }
 
-            s_textureMap[textureId] = texture;
+            s_textureMap[textureId] = {texture, s_swapW, s_swapH};
             InvalidateTextureLookupCache();
-            s_textureSizes[textureId] = {s_swapW, s_swapH};
             s_ownedTextureIds.insert(textureId);
             ++s_dbgTextureCreatesThisFrame;
         }
@@ -2955,8 +2971,8 @@ public:
             return;
         }
 
-        void* pTex = LookupTextureForDraw(textureId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(textureId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderQuad2D -- unknown textureId {}, skipping", textureId);
             return;
@@ -3006,8 +3022,11 @@ public:
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedQuads;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = textureId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.idxCount = drawQuads * 6;
         cmd.fogUniform = m_fogUniform;
@@ -3062,8 +3081,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        void* pTex = LookupTextureForDraw(resolvedTexId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderTriangles -- unknown textureId {}, skipping", textureId);
             return;
@@ -3100,8 +3119,11 @@ public:
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawTriangles;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.vtxCount = static_cast<Uint32>(vertices.size());
         cmd.vu.mvp = m_mvpMatrix;
@@ -3152,8 +3174,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        void* pTex = LookupTextureForDraw(resolvedTexId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderQuad3D -- unknown textureId {}, skipping", textureId);
             return;
@@ -3196,8 +3218,11 @@ public:
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedQuads;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.idxCount = drawQuads * 6u;
         cmd.vu.mvp = m_mvpMatrix;
@@ -3240,8 +3265,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        auto* texture = static_cast<SDL_GPUTexture*>(LookupTextureForDraw(resolvedTexId));
-        if (!texture)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             return false;
         }
@@ -3275,8 +3300,11 @@ public:
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawSkinnedTriangles;
         cmd.pipeline = pipeline;
-        cmd.texture = texture;
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         void* sampler = LookupSampler(resolvedTexId);
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.sampler = sampler ? static_cast<SDL_GPUSampler*>(sampler) : s_defaultSampler;
         cmd.vtxOffset = vtxOffset;
         cmd.vtxCount = static_cast<Uint32>(vertices.size());
@@ -3305,6 +3333,8 @@ public:
         cmd.skinningVu.textureCoordinateParameters[1] = parameters.textureCoordinateOffset[1];
         cmd.skinningVu.textureCoordinateParameters[2] = parameters.chromeTimeTerm;
         cmd.fogUniform = m_fogUniform;
+        cmd.blendMode = m_activeBlendMode;
+        cmd.blendEnabled = m_blendEnabled;
         s_renderCmds.push_back(cmd);
 
         ++s_dbgDrawCallsThisFrame;
@@ -3327,8 +3357,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        void* pTex = LookupTextureForDraw(resolvedTexId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderQuadStrip -- unknown textureId {}, skipping", textureId);
             return;
@@ -3388,8 +3418,11 @@ public:
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedStrip;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.idxCount = numIndices;
         cmd.stripIdxOffset = stripIdxByteOffset;
@@ -3397,6 +3430,8 @@ public:
         cmd.vu.fogStart = m_fogUniform.fogStart;
         cmd.vu.fogEnd = m_fogUniform.fogEnd;
         cmd.fogUniform = m_fogUniform;
+        cmd.blendMode = m_activeBlendMode;
+        cmd.blendEnabled = m_blendEnabled;
         s_renderCmds.push_back(cmd);
 
         ++s_dbgDrawCallsThisFrame;
@@ -3412,6 +3447,11 @@ public:
     {
         m_blendEnabled = true;
         m_activeBlendMode = mode;
+    }
+
+    void SetDrawFilter(const Render::DrawFilter& filter) override
+    {
+        s_drawFilter = filter;
     }
 
     // -----------------------------------------------------------------------
@@ -4457,7 +4497,7 @@ private:
             }
 
             SDL_GPUColorTargetInfo colorTarget{};
-            colorTarget.texture = static_cast<SDL_GPUTexture*>(textureIt->second);
+            colorTarget.texture = static_cast<SDL_GPUTexture*>(textureIt->second.texture);
             colorTarget.clear_color = SDL_FColor{0.10f, 0.10f, 0.12f, 1.0f};
             colorTarget.load_op = SDL_GPU_LOADOP_CLEAR;
             colorTarget.store_op = SDL_GPU_STOREOP_STORE;
@@ -4497,7 +4537,8 @@ private:
                 {
                     continue; // skip SetViewport/SetScissor/EditorOverlay - not relevant to a model capture
                 }
-                ReplayDrawCommand(cmd, boneDataReady, scissor, replayState);
+                ReplayDrawCommand(cmd, static_cast<std::uint32_t>(i - capture.startCmd), boneDataReady, scissor,
+                                  replayState);
                 cmd.consumedByOffscreenCapture = true;
             }
 
@@ -4918,7 +4959,7 @@ private:
         SDL_ReleaseGPUTransferBuffer(s_device, pixelTransfer);
 
         // Register the white texture as textureId=0 (sentinel for "no texture").
-        RegisterTexture(0u, s_whiteTexture);
+        RegisterTexture(0u, s_whiteTexture, 1u, 1u);
 
         return true;
     }
