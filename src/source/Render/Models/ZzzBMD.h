@@ -240,11 +240,20 @@ public:
                                               // m_SkinStamp
     float m_LastSkinScale;                    // Transform()'s `_Scale` arg, stashed for deferred materialization
     float m_LastBoneScale; // global BoneScale AT TransformCheap() time (callers mutate the global right after)
+#ifdef _DEBUG
+    // Generation of the shared palette captured by TransformCheap(); EnsureCpu*() asserts before
+    // consuming it if another Animation() overwrote the palette in the meantime (#547).
+    bool m_DebugDeferredSharedBonePalette;
+    unsigned int m_DebugSharedBonePaletteGeneration;
+#endif
 
     BMD()
         : NumBones(0), NumActions(0), NumMeshs(0), Meshs(NULL), Bones(NULL), Actions(NULL), Textures(NULL),
           IndexTexture(NULL), m_pCurrentBoneTransform(nullptr), m_LastTranslate(false), m_SkinStamp(0),
           m_LastSkinScale(0.f), m_LastBoneScale(1.f)
+#ifdef _DEBUG
+          , m_DebugDeferredSharedBonePalette(false), m_DebugSharedBonePaletteGeneration(0)
+#endif
     {
         m_LastLightPosition[0] = m_LastLightPosition[1] = m_LastLightPosition[2] = 0.f;
         for (int _i = 0; _i < MAX_MESH; _i++)

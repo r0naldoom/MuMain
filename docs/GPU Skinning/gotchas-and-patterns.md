@@ -23,6 +23,10 @@
   consumers. State such as body scale, bone scale, and translate mode must be
   captured when the deferred transform is requested, not read later from
   mutable globals.
+- The shared global `::BoneTransform` must be materialized by `BMD::Transform()`
+  before another `Animation()` can replace it. Debug builds assert on a deferred
+  CPU consumer that observes the replacement; make that transform eager rather
+  than copying a stale palette (#547).
 - Cloth, shadow-volume, shadow-map, and vertex-wave paths intentionally remain
   CPU consumers. GPU eligibility must not bypass their materialization calls.
 
