@@ -143,13 +143,22 @@ version it with the comparison fixture rather than changing its tracked
 history.
 
 `lost-tower-wall-v1` pins the current client to a windowed `800×600` target,
-Lost Tower map `4`, and grid position `(213, 72)`. The position lies inside the
+Lost Tower map `4`, and grid position `(213, 74)`. The position lies inside the
 Lost Tower safe zone, where the client terrain attribute `0x01` covers x
 `198..213` and y `70..75`; monsters neither enter nor attack there, which keeps
 combat lighting out of the scene (see "Dynamic light reaches the anchor"
 below). The south wall (y `69`) and the east wall (x `214..215`) meet at
 `(214, 69)`, next to the position, so the Default camera frames that wall
-corner instead of open floor. The fixture applies its
+corner instead of open floor. The tile itself was chosen by driving a
+client over the developer control socket and reading `state` and `screenshot`
+at every candidate inside the safe zone: at `(213, 74)` the wall runs
+diagonally across the frame with the crystal-capped pillars in view, and a
+36-second sample kept a single monster in `nearby`, wandering 9 to 11 tiles
+away. `(213, 72)` sits on a wander path and caught a monster in melee range
+with its aura in frame; `(211, 71)` and `(208, 72)` report five monsters and
+frame mostly floor. A monster inside the safe zone cannot attack, but its
+effects still light the scene, so require `nearby` to hold no monster within 8
+tiles before a capture and retry when it does. The fixture applies its
 target after loading `config.ini` and before SDL creates the window, so a saved
 fullscreen or display resolution cannot alter a capture. Its world viewport
 reserves the legacy `48` reference pixels rather than the gameplay HUD's `51`;
@@ -158,14 +167,14 @@ material comparisons and is not a judgment on the new HUD design. The
 historical client already reserves `48` reference pixels, and its local
 comparison patch MUST apply the same windowed target.
 
-Place the dedicated fixture character on map `4`, grid `(213, 72)`, before a
+Place the dedicated fixture character on map `4`, grid `(213, 74)`, before a
 parity run. Run the placement update while the client is closed: it otherwise
 saves its in-memory position on logout and overwrites the database value. The
 following SQL is a template; substitute the dedicated character name and keep
 credentials and local paths out of tracked documentation:
 
 ```sql
-UPDATE data."Character" SET "PositionX" = 213, "PositionY" = 72
+UPDATE data."Character" SET "PositionX" = 213, "PositionY" = 74
 WHERE "Name" = '<fixture-character>';
 SELECT "Name", "PositionX", "PositionY" FROM data."Character"
 WHERE "Name" = '<fixture-character>';

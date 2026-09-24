@@ -28,8 +28,14 @@ constexpr FixtureDefinition LOST_TOWER_WALL_V1 = {
     // Inside the Lost Tower safe zone (terrain attribute 0x01 covers x 198..213, y 70..75): monsters neither enter
     // nor attack there, so no combat effect can add dynamic light to the captured terrain and static objects. The
     // south (y 69) and east (x 214..215) walls meet at (214, 69), so the default camera frames that wall corner.
+    //
+    // This exact tile was picked by driving the client over the control socket and reading `state` and `screenshot`
+    // at each candidate: the wall runs diagonally across the frame here with the crystal-capped pillars in view,
+    // and over 36 s of sampling only one monster stayed in `nearby`, wandering 9 to 11 tiles away. The neighbouring
+    // tiles are worse: (213, 72) sits on a wander path and caught a monster in melee range with its aura in frame,
+    // while (211, 71) and (208, 72) report five monsters and frame mostly floor.
     213,
-    72,
+    74,
     0.0,
     LOST_TOWER_WALL_WARMUP_FRAMES,
     LOST_TOWER_WALL_POST_CAPTURE_FRAMES,
