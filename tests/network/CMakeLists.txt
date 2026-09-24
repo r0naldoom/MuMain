@@ -32,6 +32,13 @@ if(ENABLE_CONTROL_SOCKET)
         LINK_LIBS
             MuClient
     )
+
+    mu_add_test(
+        NAME test_control_console
+        SOURCES
+            test_control_console.cpp
+            ${CMAKE_SOURCE_DIR}/src/source/App/Control/ConsoleCommand.cpp
+    )
 else()
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/muclient_sources.txt"

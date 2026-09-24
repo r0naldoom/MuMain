@@ -84,6 +84,7 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 | `pickup` (`item`) | walk to a drop and take it, by the id `nearby` reports for it |
 | `use` (`slot`), `equip` (`slot`, `target_slot`) | inventory actions |
 | `say` (`text`), `whisper` (`name`, `text`) | chat, including `/` commands |
+| `console` (`text`) | execute a local `$` diagnostic command; never sends chat. Unknown or malformed text returns `bad_request`; a Debug-only command in Release returns `not_allowed`. |
 | `party` (`action`, `target`) | `invite`, `accept`, `decline`, `leave` |
 | `halt` | stop the walk or repeated attack in progress |
 

@@ -1,11 +1,12 @@
 #include "stdafx.h"
 #include "App/Control/ControlCommands.h"
+#include "App/Control/ConsoleCommand.h"
 
 #include "App/Control/ControlEvents.h"
 #include "App/Control/ControlObjects.h"
 #include "Core/Text/Utf8.h"
+#include "Core/Utilities/Log/muConsoleDebug.h"
 #include "Engine/Object/ZzzCharacter.h"
-#include "Engine/Object/ZzzInterface.h"
 #include "Engine/Object/ZzzInfomation.h"
 #include "Engine/Object/ZzzInventory.h"
 #include "Engine/Object/ZzzOpenData.h"
@@ -29,10 +30,10 @@
 #include <cstdint>
 #include <chrono>
 #include <cmath>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace
@@ -228,6 +229,11 @@ void SendChat(const std::string& text)
 {
     const std::wstring wide = Core::Text::FromUtf8(text);
     SocketClient->ToGameServer()->SendPublicChatMessage(MU_C16(Hero->ID), MU_C16(wide.c_str()));
+}
+
+bool ParseConsoleCommand(const std::wstring& command)
+{
+    return g_ConsoleDebug->CheckCommand(command);
 }
 
 // Whether a tile pair addresses a square of the map at all. The path
@@ -1142,6 +1148,34 @@ std::string EquipItem(const Request& request, std::unique_ptr<Act>&)
     result["slot"] = fromSlot;
     result["target_slot"] = toSlot;
     return EncodeResult(request.EncodedId(), result.dump());
+}
+
+std::string Console(const Request& request, std::unique_ptr<Act>&)
+{
+    std::string text;
+    if (!request.GetString("text", text) || text.empty())
+    {
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "`console` needs a text");
+    }
+
+    const std::wstring command = Core::Text::FromUtf8(text);
+    switch (App::Control::Console::Execute(command, ParseConsoleCommand))
+    {
+    case App::Control::Console::Result::Consumed:
+    {
+        json result;
+        result["text"] = text;
+        result["consumed"] = true;
+        return EncodeResult(request.EncodedId(), result.dump());
+    }
+    case App::Control::Console::Result::Unrecognized:
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "unrecognized console command");
+    case App::Control::Console::Result::Invalid:
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "console command has an invalid argument");
+    case App::Control::Console::Result::DebugOnly:
+        return EncodeError(request.EncodedId(), ErrorCode::NotAllowed, "console command is available only in Debug builds");
+    }
+    return EncodeError(request.EncodedId(), ErrorCode::Failed, "console command failed");
 }
 
 std::string Say(const Request& request, std::unique_ptr<Act>&)

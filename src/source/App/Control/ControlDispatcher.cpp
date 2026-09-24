@@ -52,6 +52,7 @@ const std::vector<CommandEntry>& CommandTable()
         {"use", SceneRequirement::World, &Commands::UseItem},
         {"equip", SceneRequirement::World, &Commands::EquipItem},
         {"say", SceneRequirement::World, &Commands::Say},
+        {"console", SceneRequirement::Any, &Commands::Console},
         {"whisper", SceneRequirement::World, &Commands::Whisper},
         {"party", SceneRequirement::World, &Commands::Party},
         {"halt", SceneRequirement::Any, &Commands::Halt},

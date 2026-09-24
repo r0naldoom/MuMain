@@ -1,12 +1,12 @@
 # Render Diagnostics
 
-> **Status:** design baseline. No runtime control described here is implemented yet.
+> **Status:** the `console` control is implemented. The draw filter remains a design baseline.
 
 ## Purpose
 
 A visual artifact can be caused by any draw in a long frame. The golden-panel
 investigation (#621) required exporting 13 render targets and manually bisecting
-a captured draw stream. This proposal defines two developer-only controls that
+a captured draw stream. The implemented console control and proposed draw filter
 make that investigation live and repeatable:
 
 1. execute existing diagnostic console commands through the control socket; and
@@ -43,24 +43,25 @@ and macro behavior. The wrapper is intentionally not the socket interface:
 using it would make a developer render command depend on scene/UI lifetime and
 could consume or send ordinary chat unexpectedly.
 
-### Proposed interface
+### Interface
 
-Add a distinct control-socket command rather than changing the meaning of
-`say`:
+The control socket provides a distinct command rather than changing the meaning
+of `say`:
 
 ```json
 {"cmd":"console","text":"$effects sprites off"}
 ```
 
-The command should call only `CmuConsoleDebug::CheckCommand` and return whether
-it consumed the text. It must never send a public chat packet, open a chat box,
-or simulate keyboard input. Unknown text should receive a local control-socket
-error rather than silently being sent as chat.
+It calls only `CmuConsoleDebug::CheckCommand` and returns whether the parser
+consumed the text. It never sends a public chat packet, opens a chat box, or
+simulates keyboard input. Unknown text receives a local control-socket error
+rather than being sent as chat.
 
-The socket command must validate inputs before invoking the legacy parser. In
-particular, the parser's `$fps` and `$winmsg` branches use `std::stof`; malformed
-numeric text must become a structured request failure instead of escaping the
-main loop.
+The request boundary catches standard exceptions from the legacy parser. This
+contains malformed numeric arguments from `$fps`, `$winmsg`, and future parser
+branches without duplicating the parser's grammar. Debug-only commands requested
+in Release return `not_allowed`.
+
 
 ### Release command surface
 
