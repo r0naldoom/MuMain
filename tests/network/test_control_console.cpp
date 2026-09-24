@@ -4,7 +4,10 @@
 
 #include "doctest.h"
 
+#include "App/Control/ControlStats.h"
+
 #include "App/Control/ConsoleCommand.h"
+#include "Render/Renderer/MuRenderer.h"
 
 #include <stdexcept>
 #include <string>
@@ -62,3 +65,32 @@ TEST_CASE("Control console identifies Debug-only commands in Release [network][c
     CHECK_FALSE(parserCalled);
 }
 #endif
+
+TEST_CASE("Control stats reports the completed renderer frame [network][control-console]")
+{
+    mu::RendererStats stats{};
+    stats.frame = 417;
+    stats.requestedDrawCalls = 230;
+    stats.submittedDrawCalls = 91;
+    stats.renderCommandsReplayed = 88;
+    stats.fallbackTextureDraws = 3;
+    stats.whiteTextureDraws = 5;
+    stats.realTextureDraws = 225;
+    stats.mergedDrawCalls = 139;
+    stats.pipelineBinds = 47;
+    stats.samplerBinds = 44;
+    stats.fragmentUniformPushes = 31;
+    stats.vertexBytes = 4096;
+    stats.batchBreakBlend = 7;
+    stats.batchBreakDepth = 6;
+    stats.batchBreakMatrix = 5;
+    stats.batchBreakTexture = 4;
+    stats.batchBreakProgram = 3;
+    stats.batchBreakUniform = 2;
+    stats.batchBreakDraw = 1;
+    stats.batchBreakOther = 8;
+    stats.frameProfilerTextureUploads = 9;
+
+    CHECK(App::Control::Stats::ResultObject(stats) ==
+          R"({"frame":417,"s_dbgDrawCallsThisFrame":230,"s_dbgGpuDrawCallsThisFrame":91,"s_dbgRenderCmdsReplayedThisFrame":88,"s_dbgFallbackTextureThisFrame":3,"s_dbgWhiteTextureDrawsThisFrame":5,"s_dbgRealTextureDrawsThisFrame":225,"s_dbgMergedDrawsThisFrame":139,"s_dbgPipelineBindsThisFrame":47,"s_dbgSamplerBindsThisFrame":44,"s_dbgFragmentUniformPushesThisFrame":31,"s_dbgVtxBytesThisFrame":4096,"BatchBreakBlend":7,"BatchBreakDepth":6,"BatchBreakMatrix":5,"BatchBreakTexture":4,"BatchBreakProgram":3,"BatchBreakUniform":2,"BatchBreakDraw":1,"BatchBreakOther":8,"TextureUploads":9})");
+}

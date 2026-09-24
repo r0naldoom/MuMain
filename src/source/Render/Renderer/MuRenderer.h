@@ -133,6 +133,7 @@ struct SkinningParameters
 
 struct RendererStats
 {
+    std::uint32_t frame = 0;
     std::uint32_t requestedDrawCalls = 0;
     std::uint32_t submittedDrawCalls = 0;
     std::uint32_t mergedDrawCalls = 0;
@@ -146,6 +147,19 @@ struct RendererStats
     std::uint32_t samplerBinds = 0;
     std::uint32_t vertexUniformPushes = 0;
     std::uint32_t fragmentUniformPushes = 0;
+    std::uint32_t renderCommandsReplayed = 0;
+    std::uint32_t fallbackTextureDraws = 0;
+    std::uint32_t whiteTextureDraws = 0;
+    std::uint32_t realTextureDraws = 0;
+    std::uint32_t batchBreakBlend = 0;
+    std::uint32_t batchBreakDepth = 0;
+    std::uint32_t batchBreakMatrix = 0;
+    std::uint32_t batchBreakTexture = 0;
+    std::uint32_t batchBreakProgram = 0;
+    std::uint32_t batchBreakUniform = 0;
+    std::uint32_t batchBreakDraw = 0;
+    std::uint32_t batchBreakOther = 0;
+    std::uint32_t frameProfilerTextureUploads = 0;
     double frameMilliseconds = 0.0;
     double replayMilliseconds = 0.0;
     double submitMilliseconds = 0.0;

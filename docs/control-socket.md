@@ -66,6 +66,7 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 |---|---|
 | `ping` | build identifier and current scene |
 | `scene` | which screen the client is on: `login`, `character_list`, `world`, … |
+| `stats` | renderer counters for the last complete frame; `frame` identifies that snapshot |
 | `state` | the character and everything around it (see below) |
 | `nearby` | the objects the client can see |
 | `events` (`since`, `follow`) | recorded events, or a live stream of them |
@@ -88,6 +89,15 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 | `draw-filter` (`texture_id`, `texture_width`/`texture_height`, `blend`, `submitted_ordinal_first`/`submitted_ordinal_last`) | disable replayed geometry matching every supplied clause. `clear:true` restores normal replay. |
 | `party` (`action`, `target`) | `invite`, `accept`, `decline`, `leave` |
 | `halt` | stop the walk or repeated attack in progress |
+
+### Renderer statistics
+
+`stats` is a cheap live probe for Release map and effect sweeps. It returns the renderer's existing per-frame
+counter names, plus `frame`, which is the completed frame number. Read the command twice and require different
+`frame` values before comparing results; repeated values are the same snapshot. `s_dbgFallbackTextureThisFrame`
+is a draw that requested an unavailable texture and used the white fallback. Divide it by
+`s_dbgRealTextureDrawsThisFrame` to compare fallback rates between maps. `BatchBreak*` and `TextureUploads`
+come from `FrameProfiler`; they are zero unless the existing profiler counters are enabled.
 
 `state` reports the scene and account on every screen, and in the world adds:
 character name, class, level, experience, zen, HP/mana/SD/AG with their

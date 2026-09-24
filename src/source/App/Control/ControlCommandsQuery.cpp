@@ -3,6 +3,7 @@
 
 #include "App/Control/ControlEvents.h"
 #include "App/Control/ControlState.h"
+#include "App/Control/ControlStats.h"
 #include "Core/Input/SyntheticInput.h"
 #include "Core/Text/Utf8.h"
 #include "Network/Server/WSclient.h"
@@ -415,6 +416,11 @@ std::string Ping(const Request& request, std::unique_ptr<Act>&)
     result["build"] = BuildIdentifier();
     result["scene"] = CurrentSceneName();
     return EncodeResult(request.EncodedId(), result.dump());
+}
+
+std::string Stats(const Request& request, std::unique_ptr<Act>&)
+{
+    return EncodeResult(request.EncodedId(), App::Control::Stats::ResultObject(mu::GetRenderer().GetFrameStats()));
 }
 
 std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)

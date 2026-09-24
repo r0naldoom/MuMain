@@ -38,6 +38,7 @@ if(ENABLE_CONTROL_SOCKET)
         SOURCES
             test_control_console.cpp
             ${CMAKE_SOURCE_DIR}/src/source/App/Control/ConsoleCommand.cpp
+            ${CMAKE_SOURCE_DIR}/src/source/App/Control/ControlStats.cpp
     )
 else()
     file(GENERATE

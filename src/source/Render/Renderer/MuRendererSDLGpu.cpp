@@ -456,6 +456,7 @@ static bool s_statsEnabled = false;
 static bool s_disableD3D12Culling = false;
 static bool s_disableD3D12TriangleMerging = false;
 static mu::RendererStats s_lastFrameStats;
+
 static std::chrono::steady_clock::time_point s_frameBeginTime;
 static std::chrono::steady_clock::time_point s_renderReplayBeginTime;
 static std::chrono::steady_clock::time_point s_submitTime;
@@ -585,6 +586,36 @@ static std::vector<RenderCmd> s_renderCmds;
 static constexpr std::size_t kNoDrawCommand = std::numeric_limits<std::size_t>::max();
 static Render::DrawCommandHistory s_previousDrawCommands;
 static Render::DrawFilter s_drawFilter;
+void CaptureLastFrameStats()
+{
+    s_lastFrameStats.frame = s_dbgFrameCount;
+    s_lastFrameStats.requestedDrawCalls = s_dbgDrawCallsThisFrame;
+    s_lastFrameStats.submittedDrawCalls = s_dbgGpuDrawCallsThisFrame;
+    s_lastFrameStats.mergedDrawCalls = s_dbgMergedDrawsThisFrame;
+    s_lastFrameStats.merged2DDrawCalls = s_dbgMerged2DDrawsThisFrame;
+    s_lastFrameStats.commandCount = static_cast<std::uint32_t>(s_renderCmds.size());
+    s_lastFrameStats.vertexBytes = s_dbgVtxBytesThisFrame;
+    s_lastFrameStats.textureUploads = s_dbgTextureUploadsThisFrame;
+    s_lastFrameStats.textureCreates = s_dbgTextureCreatesThisFrame;
+    s_lastFrameStats.textureReleases = s_dbgTextureReleasesThisFrame;
+    s_lastFrameStats.pipelineBinds = s_dbgPipelineBindsThisFrame;
+    s_lastFrameStats.samplerBinds = s_dbgSamplerBindsThisFrame;
+    s_lastFrameStats.vertexUniformPushes = s_dbgVertexUniformPushesThisFrame;
+    s_lastFrameStats.fragmentUniformPushes = s_dbgFragmentUniformPushesThisFrame;
+    s_lastFrameStats.renderCommandsReplayed = s_dbgRenderCmdsReplayedThisFrame;
+    s_lastFrameStats.fallbackTextureDraws = s_dbgFallbackTextureThisFrame;
+    s_lastFrameStats.whiteTextureDraws = s_dbgWhiteTextureDrawsThisFrame;
+    s_lastFrameStats.realTextureDraws = s_dbgRealTextureDrawsThisFrame;
+    s_lastFrameStats.batchBreakBlend = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakBlend);
+    s_lastFrameStats.batchBreakDepth = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakDepth);
+    s_lastFrameStats.batchBreakMatrix = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakMatrix);
+    s_lastFrameStats.batchBreakTexture = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakTexture);
+    s_lastFrameStats.batchBreakProgram = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakProgram);
+    s_lastFrameStats.batchBreakUniform = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakUniform);
+    s_lastFrameStats.batchBreakDraw = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakDraw);
+    s_lastFrameStats.batchBreakOther = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakOther);
+    s_lastFrameStats.frameProfilerTextureUploads = FrameProfiler::CounterValue(FrameProfiler::Counter::TextureUploads);
+}
 
 constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-objects.complete";
 
@@ -2173,19 +2204,7 @@ public:
         s_swapchainTexture = nullptr;
 
         const auto frameCompletedAt = std::chrono::steady_clock::now();
-        s_lastFrameStats.requestedDrawCalls = s_dbgDrawCallsThisFrame;
-        s_lastFrameStats.submittedDrawCalls = s_dbgGpuDrawCallsThisFrame;
-        s_lastFrameStats.mergedDrawCalls = s_dbgMergedDrawsThisFrame;
-        s_lastFrameStats.merged2DDrawCalls = s_dbgMerged2DDrawsThisFrame;
-        s_lastFrameStats.commandCount = static_cast<std::uint32_t>(s_renderCmds.size());
-        s_lastFrameStats.vertexBytes = s_dbgVtxBytesThisFrame;
-        s_lastFrameStats.textureUploads = s_dbgTextureUploadsThisFrame;
-        s_lastFrameStats.textureCreates = s_dbgTextureCreatesThisFrame;
-        s_lastFrameStats.textureReleases = s_dbgTextureReleasesThisFrame;
-        s_lastFrameStats.pipelineBinds = s_dbgPipelineBindsThisFrame;
-        s_lastFrameStats.samplerBinds = s_dbgSamplerBindsThisFrame;
-        s_lastFrameStats.vertexUniformPushes = s_dbgVertexUniformPushesThisFrame;
-        s_lastFrameStats.fragmentUniformPushes = s_dbgFragmentUniformPushesThisFrame;
+        CaptureLastFrameStats();
         if (IsFrameTimingEnabled())
         {
             const auto milliseconds = [](auto begin, auto end)

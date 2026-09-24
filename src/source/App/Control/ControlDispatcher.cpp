@@ -31,6 +31,7 @@ const std::vector<CommandEntry>& CommandTable()
 {
     static const std::vector<CommandEntry> table = {
         {"ping", SceneRequirement::Any, &Commands::Ping},
+        {"stats", SceneRequirement::Any, &Commands::Stats},
         {"scene", SceneRequirement::Any, &Commands::Scene},
         {"state", SceneRequirement::Any, &Commands::State},
         {"nearby", SceneRequirement::World, &Commands::Nearby},
