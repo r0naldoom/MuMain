@@ -151,6 +151,9 @@ struct RendererStats
     std::uint32_t fallbackTextureDraws = 0;
     std::uint32_t whiteTextureDraws = 0;
     std::uint32_t realTextureDraws = 0;
+    std::uint32_t geometryCommands = 0;
+    std::uint32_t droppedDraws = 0;
+    std::uint32_t filteredDraws = 0;
     std::uint32_t batchBreakBlend = 0;
     std::uint32_t batchBreakDepth = 0;
     std::uint32_t batchBreakMatrix = 0;
@@ -370,8 +373,7 @@ public:
         (void)width;
         (void)height;
     }
-    [[nodiscard]] virtual std::uint32_t CreateTexture(
-        std::uint32_t width, std::uint32_t height, const void* pixels)
+    [[nodiscard]] virtual std::uint32_t CreateTexture(std::uint32_t width, std::uint32_t height, const void* pixels)
     {
         (void)width;
         (void)height;
@@ -417,7 +419,10 @@ public:
     // Real GPU texture pointer for a texture id (from CreateTexture or
     // BeginOffscreenCapture), for handing to ImGui as ImTextureID. Returns
     // nullptr if the id isn't registered.
-    [[nodiscard]] virtual void* GetTexturePointer(std::uint32_t /*textureId*/) const { return nullptr; }
+    [[nodiscard]] virtual void* GetTexturePointer(std::uint32_t /*textureId*/) const
+    {
+        return nullptr;
+    }
 
     // True if one or more completed BeginOffscreenCapture()/EndOffscreenCapture()
     // draw-command ranges are still waiting to be replayed into their capture
@@ -426,7 +431,10 @@ public:
     // resource a just-recorded capture might still be sampling (e.g. reusing a
     // scratch model slot for a different file) must wait for this to go false
     // first, or the eventual replay reads a freed texture/sampler.
-    [[nodiscard]] virtual bool HasPendingOffscreenCaptures() const { return false; }
+    [[nodiscard]] virtual bool HasPendingOffscreenCaptures() const
+    {
+        return false;
+    }
 #endif // _EDITOR
 
     // -----------------------------------------------------------------------

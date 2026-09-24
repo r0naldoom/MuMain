@@ -75,6 +75,9 @@ TEST_CASE("Control stats reports the completed renderer frame [network][control-
     stats.fallbackTextureDraws = 3;
     stats.whiteTextureDraws = 5;
     stats.realTextureDraws = 225;
+    stats.geometryCommands = 96;
+    stats.droppedDraws = 2;
+    stats.filteredDraws = 3;
     stats.mergedDrawCalls = 139;
     stats.pipelineBinds = 47;
     stats.samplerBinds = 44;
@@ -92,5 +95,5 @@ TEST_CASE("Control stats reports the completed renderer frame [network][control-
 
     CHECK(
         App::Control::Stats::ResultObject(stats) ==
-        R"({"frame":417,"s_dbgDrawCallsThisFrame":230,"s_dbgGpuDrawCallsThisFrame":91,"s_dbgRenderCmdsReplayedThisFrame":88,"s_dbgFallbackTextureThisFrame":3,"s_dbgWhiteTextureDrawsThisFrame":5,"s_dbgRealTextureDrawsThisFrame":225,"s_dbgMergedDrawsThisFrame":139,"s_dbgPipelineBindsThisFrame":47,"s_dbgSamplerBindsThisFrame":44,"s_dbgFragmentUniformPushesThisFrame":31,"s_dbgVtxBytesThisFrame":4096,"BatchBreakBlend":7,"BatchBreakDepth":6,"BatchBreakMatrix":5,"BatchBreakTexture":4,"BatchBreakProgram":3,"BatchBreakUniform":2,"BatchBreakDraw":1,"BatchBreakOther":8,"TextureUploads":9})");
+        R"({"frame":417,"s_dbgDrawCallsThisFrame":230,"s_dbgGpuDrawCallsThisFrame":91,"s_dbgRenderCmdsReplayedThisFrame":88,"s_dbgFallbackTextureThisFrame":3,"s_dbgWhiteTextureDrawsThisFrame":5,"s_dbgRealTextureDrawsThisFrame":225,"s_dbgGeometryCmdsThisFrame":96,"s_dbgDroppedDrawsThisFrame":2,"s_dbgFilteredDrawsThisFrame":3,"s_dbgMergedDrawsThisFrame":139,"s_dbgPipelineBindsThisFrame":47,"s_dbgSamplerBindsThisFrame":44,"s_dbgFragmentUniformPushesThisFrame":31,"s_dbgVtxBytesThisFrame":4096,"BatchBreakBlend":7,"BatchBreakDepth":6,"BatchBreakMatrix":5,"BatchBreakTexture":4,"BatchBreakProgram":3,"BatchBreakUniform":2,"BatchBreakDraw":1,"BatchBreakOther":8,"TextureUploads":9})");
 }

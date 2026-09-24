@@ -37,6 +37,9 @@ std::string ResultObject(const mu::RendererStats& stats)
     AppendField(result, first, "s_dbgFallbackTextureThisFrame", stats.fallbackTextureDraws);
     AppendField(result, first, "s_dbgWhiteTextureDrawsThisFrame", stats.whiteTextureDraws);
     AppendField(result, first, "s_dbgRealTextureDrawsThisFrame", stats.realTextureDraws);
+    AppendField(result, first, "s_dbgGeometryCmdsThisFrame", stats.geometryCommands);
+    AppendField(result, first, "s_dbgDroppedDrawsThisFrame", stats.droppedDraws);
+    AppendField(result, first, "s_dbgFilteredDrawsThisFrame", stats.filteredDraws);
     AppendField(result, first, "s_dbgMergedDrawsThisFrame", stats.mergedDrawCalls);
     AppendField(result, first, "s_dbgPipelineBindsThisFrame", stats.pipelineBinds);
     AppendField(result, first, "s_dbgSamplerBindsThisFrame", stats.samplerBinds);

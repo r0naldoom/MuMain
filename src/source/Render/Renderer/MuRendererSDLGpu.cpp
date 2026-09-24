@@ -445,6 +445,14 @@ static Uint32 s_dbgMergedDrawsThisFrame = 0u;
 static Uint32 s_dbgMerged2DDrawsThisFrame = 0u;
 static Uint32 s_dbgWhiteTextureDrawsThisFrame = 0u;
 static Uint32 s_dbgRealTextureDrawsThisFrame = 0u;
+// Replayed commands minus submitted draws is not the number of draws that went
+// missing: the replay loop also walks SetViewport, SetScissor and DebugLabel.
+// Splitting the three closes the arithmetic -- geometry commands equal submitted
+// plus dropped plus filtered -- so a draw that was recorded and then silently
+// not drawn stops hiding inside a per-frame constant.
+static Uint32 s_dbgGeometryCmdsThisFrame = 0u;
+static Uint32 s_dbgDroppedDrawsThisFrame = 0u;
+static Uint32 s_dbgFilteredDrawsThisFrame = 0u;
 static Uint32 s_dbgPipelineBindsThisFrame = 0u;
 static Uint32 s_dbgSamplerBindsThisFrame = 0u;
 static Uint32 s_dbgVertexUniformPushesThisFrame = 0u;
@@ -606,6 +614,9 @@ void CaptureLastFrameStats()
     s_lastFrameStats.fallbackTextureDraws = s_dbgFallbackTextureThisFrame;
     s_lastFrameStats.whiteTextureDraws = s_dbgWhiteTextureDrawsThisFrame;
     s_lastFrameStats.realTextureDraws = s_dbgRealTextureDrawsThisFrame;
+    s_lastFrameStats.geometryCommands = s_dbgGeometryCmdsThisFrame;
+    s_lastFrameStats.droppedDraws = s_dbgDroppedDrawsThisFrame;
+    s_lastFrameStats.filteredDraws = s_dbgFilteredDrawsThisFrame;
     s_lastFrameStats.batchBreakBlend = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakBlend);
     s_lastFrameStats.batchBreakDepth = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakDepth);
     s_lastFrameStats.batchBreakMatrix = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakMatrix);
@@ -831,9 +842,11 @@ static void BindReplayIndexBuffer(SDL_GPUBuffer* buffer, Uint32 offset, SDL_GPUI
 static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedOrdinal, bool boneDataReady,
                               const SDL_Rect& scissor, Render::SdlGpuReplayState& state)
 {
+    ++s_dbgGeometryCmdsThisFrame;
     if (s_drawFilter.Matches(
             {submittedOrdinal, command.textureId, command.textureWidth, command.textureHeight, command.blendEnabled}))
     {
+        ++s_dbgFilteredDrawsThisFrame;
         return;
     }
 
@@ -841,6 +854,10 @@ static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedO
     if (!command.texture || !command.sampler || (skinned && (!boneDataReady || !s_boneGpuBuf)) ||
         !BindReplayPipeline(command, state, scissor))
     {
+        // Recorded geometry that reaches here is never drawn and nothing else
+        // reports it: the texture lookup already succeeded at record time, so
+        // the fallback counter stays silent while the object is simply absent.
+        ++s_dbgDroppedDrawsThisFrame;
         return;
     }
 
@@ -1089,8 +1106,7 @@ static void WarmTtfFonts()
     TTF_Font* normal = OpenTtfFontRole(family.family, "normal", family.regular, normalPointSize);
     TTF_Font* bold = OpenTtfFontRole(family.family, "bold", family.bold, normalPointSize);
     TTF_Font* big = OpenTtfFontRole(family.family, "big-bold", family.bold, bigPointSize);
-    TTF_Font* fixed =
-        OpenTtfFontRole(kBundledFixedFont.family, "fixed", kBundledFixedFont.regular, fixedPointSize);
+    TTF_Font* fixed = OpenTtfFontRole(kBundledFixedFont.family, "fixed", kBundledFixedFont.regular, fixedPointSize);
     TTF_Font* fallback = OpenTtfFallbackRole("normal", normalPointSize);
     TTF_Font* fallbackBold = OpenTtfFallbackRole("bold", normalPointSize);
     TTF_Font* fallbackBig = OpenTtfFallbackRole("big-bold", bigPointSize);
@@ -1759,6 +1775,9 @@ public:
         s_dbgMerged2DDrawsThisFrame = 0u;
         s_dbgWhiteTextureDrawsThisFrame = 0u;
         s_dbgRealTextureDrawsThisFrame = 0u;
+        s_dbgGeometryCmdsThisFrame = 0u;
+        s_dbgDroppedDrawsThisFrame = 0u;
+        s_dbgFilteredDrawsThisFrame = 0u;
         s_dbgPipelineBindsThisFrame = 0u;
         s_dbgSamplerBindsThisFrame = 0u;
         s_dbgVertexUniformPushesThisFrame = 0u;
@@ -2031,8 +2050,7 @@ public:
         if (s_pendingFrameCaptureTextureId != 0u)
         {
             const auto texture = s_textureMap.find(s_pendingFrameCaptureTextureId);
-            if (texture != s_textureMap.end() && texture->second.width == s_swapW &&
-                texture->second.height == s_swapH)
+            if (texture != s_textureMap.end() && texture->second.width == s_swapW && texture->second.height == s_swapH)
             {
                 reconnectCaptureTexture = static_cast<SDL_GPUTexture*>(texture->second.texture);
             }
@@ -2827,7 +2845,7 @@ public:
     }
 
     [[nodiscard]] std::uint32_t BeginOffscreenCapture(std::uint32_t textureId, std::uint32_t width,
-                                                       std::uint32_t height) override
+                                                      std::uint32_t height) override
     {
         if (!s_device || !s_frameActive || width == 0u || height == 0u)
         {
@@ -2877,9 +2895,8 @@ public:
             return;
         }
 
-        s_pendingOffscreenCaptures.push_back({s_offscreenCaptureStart, s_renderCmds.size(),
-                                              s_offscreenCaptureTextureId, s_offscreenCaptureWidth,
-                                              s_offscreenCaptureHeight});
+        s_pendingOffscreenCaptures.push_back({s_offscreenCaptureStart, s_renderCmds.size(), s_offscreenCaptureTextureId,
+                                              s_offscreenCaptureWidth, s_offscreenCaptureHeight});
         s_offscreenCaptureTextureId = 0u;
     }
 
@@ -4537,8 +4554,8 @@ private:
                 continue;
             }
 
-            const SDL_GPUViewport viewport{0.0f, 0.0f, static_cast<float>(capture.width),
-                                           static_cast<float>(capture.height), 0.0f, 1.0f};
+            const SDL_GPUViewport viewport{
+                0.0f, 0.0f, static_cast<float>(capture.width), static_cast<float>(capture.height), 0.0f, 1.0f};
             SDL_SetGPUViewport(s_renderPass, &viewport);
             const SDL_Rect scissor{0, 0, static_cast<int>(capture.width), static_cast<int>(capture.height)};
             SDL_SetGPUScissor(s_renderPass, &scissor);
@@ -4547,11 +4564,10 @@ private:
             for (std::size_t i = capture.startCmd; i < capture.endCmd && i < s_renderCmds.size(); ++i)
             {
                 RenderCmd& cmd = s_renderCmds[i];
-                const bool isGeometryDraw = cmd.type == RenderCmdType::DrawTriangles ||
-                                           cmd.type == RenderCmdType::DrawSkinnedTriangles ||
-                                           cmd.type == RenderCmdType::DrawIndexedQuads ||
-                                           cmd.type == RenderCmdType::DrawIndexedStrip ||
-                                           cmd.type == RenderCmdType::DrawTriangles2D;
+                const bool isGeometryDraw =
+                    cmd.type == RenderCmdType::DrawTriangles || cmd.type == RenderCmdType::DrawSkinnedTriangles ||
+                    cmd.type == RenderCmdType::DrawIndexedQuads || cmd.type == RenderCmdType::DrawIndexedStrip ||
+                    cmd.type == RenderCmdType::DrawTriangles2D;
                 if (!isGeometryDraw)
                 {
                     continue; // skip SetViewport/SetScissor/EditorOverlay - not relevant to a model capture
