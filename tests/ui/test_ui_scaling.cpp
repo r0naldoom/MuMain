@@ -2,6 +2,9 @@
 
 #include <doctest.h>
 
+#include <cmath>
+#include <string_view>
+
 #include "Character/CharSelMainWin.h"
 #include "Core/Input/Input.h"
 #include "Core/Platform/WinCompat.h"
@@ -147,6 +150,30 @@ TEST_CASE("scene fixture schedules one capture after readiness [scene][fixture]"
 
     SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1");
     CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    // The fixture is process-wide state: leaving it active here changes the world
+    // viewport for every test that runs after this one.
+    SceneFixture::ConfigureFromCommandLine(L"");
+    CHECK_FALSE(SceneFixture::IsActive());
+}
+
+TEST_CASE("wings scene pins the flare pulse to its crest [scene][fixture]")
+{
+    SceneFixture::ConfigureFromCommandLine(L"--scene=hero-wings-v1");
+    CHECK(SceneFixture::IsActive());
+    CHECK(std::wstring_view(SceneFixture::GetId()) == L"hero-wings-v1");
+
+    CHECK_FALSE(SceneFixture::ObserveServerSpawn(3, 139, 108));
+    CHECK(SceneFixture::ObserveServerSpawn(4, 213, 74));
+
+    double worldTime = 1234.0;
+    SceneFixture::ApplyWorldTime(worldTime);
+    // The wing flares scale and colour by absf(sinf(WorldTime * 0.002f)); the pinned
+    // time has to sit on that pulse's crest for a capture pair to be comparable.
+    CHECK(std::fabs(std::sin(worldTime * 0.002)) == doctest::Approx(1.0));
+
+    SceneFixture::ConfigureFromCommandLine(L"--scene=no-such-scene");
+    CHECK_FALSE(SceneFixture::IsActive());
 
     // The fixture is process-wide state: leaving it active here changes the world
     // viewport for every test that runs after this one.

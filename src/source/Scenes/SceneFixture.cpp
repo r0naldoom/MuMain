@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "SceneFixture.h"
 
+#include <array>
 #include <cstdlib>
 
 
@@ -15,6 +16,7 @@ struct FixtureDefinition
     unsigned char positionX;
     unsigned char positionY;
     double worldTime;
+    unsigned int randomSeed;
     unsigned int captureAfterReadyFrames;
     unsigned int exitAfterCaptureFrames;
 };
@@ -22,10 +24,11 @@ struct FixtureDefinition
 // The client seeds the RNG from the clock, and object lighting reads it while the map loads: the crystal caps on
 // the Lost Tower pillars come out at a different brightness in every run. Two captures of the same build differed
 // on 0.31% of the frame, in ten blobs sitting exactly on the two pillar rows, one of them swinging a channel by 188
-// of 255. A fixed seed removes that whole class of noise from a parity run; both builds must use the same value.
-constexpr unsigned int LOST_TOWER_WALL_RANDOM_SEED = 20260924u;
-constexpr unsigned int LOST_TOWER_WALL_WARMUP_FRAMES = 240;
-constexpr unsigned int LOST_TOWER_WALL_POST_CAPTURE_FRAMES = 2;
+// of 255. A fixed seed removes that whole class of noise from a parity run; both builds must use the same value,
+// which is why every scene here shares this one.
+constexpr unsigned int PARITY_RANDOM_SEED = 20260924u;
+constexpr unsigned int WARMUP_FRAMES = 240;
+constexpr unsigned int POST_CAPTURE_FRAMES = 2;
 
 constexpr FixtureDefinition LOST_TOWER_WALL_V1 = {
     L"lost-tower-wall-v1",
@@ -44,9 +47,36 @@ constexpr FixtureDefinition LOST_TOWER_WALL_V1 = {
     213,
     74,
     0.0,
-    LOST_TOWER_WALL_WARMUP_FRAMES,
-    LOST_TOWER_WALL_POST_CAPTURE_FRAMES,
+    PARITY_RANDOM_SEED,
+    WARMUP_FRAMES,
+    POST_CAPTURE_FRAMES,
 };
+
+// A hero close-up for the wing effects, on the same Lost Tower tile as the wall scene. Noria's grass looked like
+// the natural stage for it and was tried first, but (139, 108) has a Goblin parked on (138, 108) that the scene
+// gate rejected on every attempt, so this reuses the stage whose noise floor is already measured at 0.000000 on
+// both builds: anything that differs outside the wings here is a red flag about the run, not about the wings.
+//
+// The world time is what makes this a separate scene. The wing flares read it directly:
+// RenderPartObjectEffect's MODEL_WING_OF_ILLUSION branch derives both the sprite scale and the emitted colour from
+// absf(sinf(WorldTime * 0.002f)), a 1.57 s pulse. A capture taken at an arbitrary phase compares two different
+// brightnesses, so a single pair would prove nothing. Pinning the time to 785.398 ms puts the pulse exactly on its
+// crest (sinf(1.5708) == 1), which is both deterministic and the worst case for additive saturation: the flares
+// are at their largest and brightest, so any difference in how the two builds accumulate them shows here first.
+constexpr FixtureDefinition HERO_WINGS_V1 = {
+    L"hero-wings-v1",
+    {800, 600},
+    48.0f,
+    4,
+    213,
+    74,
+    785.398163397448,
+    PARITY_RANDOM_SEED,
+    WARMUP_FRAMES,
+    POST_CAPTURE_FRAMES,
+};
+
+constexpr std::array<const FixtureDefinition*, 2> DEFINITIONS = {&LOST_TOWER_WALL_V1, &HERO_WINGS_V1};
 
 enum class CaptureStage
 {
@@ -57,7 +87,7 @@ enum class CaptureStage
     Exiting,
 };
 
-bool s_active = false;
+const FixtureDefinition* s_definition = nullptr;
 bool s_ready = false;
 bool s_captureWhenReady = false;
 bool s_exitAfterCapture = false;
@@ -65,7 +95,7 @@ CaptureStage s_captureStage = CaptureStage::Idle;
 unsigned int s_readyFrameCount = 0;
 unsigned int s_framesAfterCapture = 0;
 
-[[nodiscard]] bool HasLostTowerWallSelector(std::wstring_view commandLine)
+[[nodiscard]] const FixtureDefinition* FindSceneSelector(std::wstring_view commandLine)
 {
     constexpr std::wstring_view prefix = L"--scene=";
     constexpr std::wstring_view whitespace = L" \t\r\n";
@@ -75,9 +105,16 @@ unsigned int s_framesAfterCapture = 0;
     {
         const std::size_t end = commandLine.find_first_of(whitespace, start);
         const std::wstring_view argument = commandLine.substr(start, end - start);
-        if (argument.starts_with(prefix) && argument.substr(prefix.size()) == LOST_TOWER_WALL_V1.id)
+        if (argument.starts_with(prefix))
         {
-            return true;
+            const std::wstring_view id = argument.substr(prefix.size());
+            for (const FixtureDefinition* definition : DEFINITIONS)
+            {
+                if (definition->id == id)
+                {
+                    return definition;
+                }
+            }
         }
 
         if (end == std::wstring_view::npos)
@@ -87,7 +124,7 @@ unsigned int s_framesAfterCapture = 0;
         start = commandLine.find_first_not_of(whitespace, end);
     }
 
-    return false;
+    return nullptr;
 }
 
 [[nodiscard]] bool HasCommandLineArgument(std::wstring_view commandLine, std::wstring_view expected)
@@ -116,9 +153,9 @@ unsigned int s_framesAfterCapture = 0;
 
 void SceneFixture::ConfigureFromCommandLine(std::wstring_view commandLine)
 {
-    s_active = HasLostTowerWallSelector(commandLine);
+    s_definition = FindSceneSelector(commandLine);
     s_ready = false;
-    s_captureWhenReady = s_active && HasCommandLineArgument(commandLine, L"--capture-when-ready");
+    s_captureWhenReady = s_definition != nullptr && HasCommandLineArgument(commandLine, L"--capture-when-ready");
     s_exitAfterCapture = s_captureWhenReady && HasCommandLineArgument(commandLine, L"--exit-after-capture");
     s_captureStage = s_captureWhenReady ? CaptureStage::Waiting : CaptureStage::Idle;
     s_readyFrameCount = 0;
@@ -127,44 +164,44 @@ void SceneFixture::ConfigureFromCommandLine(std::wstring_view commandLine)
 
 bool SceneFixture::IsActive()
 {
-    return s_active;
+    return s_definition != nullptr;
 }
 
 std::optional<SceneFixture::TargetWindowSize> SceneFixture::GetTargetWindowSize()
 {
-    if (!s_active)
+    if (s_definition == nullptr)
     {
         return std::nullopt;
     }
 
-    return LOST_TOWER_WALL_V1.targetWindowSize;
+    return s_definition->targetWindowSize;
 }
 
 std::optional<float> SceneFixture::GetWorldViewportBottomReserve()
 {
-    if (!s_active)
+    if (s_definition == nullptr)
     {
         return std::nullopt;
     }
 
-    return LOST_TOWER_WALL_V1.worldViewportBottomReserve;
+    return s_definition->worldViewportBottomReserve;
 }
 
 bool SceneFixture::ObserveServerSpawn(int map, unsigned char positionX, unsigned char positionY)
 {
-    if (!s_active)
+    if (s_definition == nullptr)
     {
         return false;
     }
 
-    const bool ready = map == LOST_TOWER_WALL_V1.map && positionX == LOST_TOWER_WALL_V1.positionX &&
-                       positionY == LOST_TOWER_WALL_V1.positionY;
+    const bool ready =
+        map == s_definition->map && positionX == s_definition->positionX && positionY == s_definition->positionY;
     if (ready && !s_ready)
     {
         // Seeding at startup is not enough: the number of frames spent on the login and character scenes varies,
         // and every rand() consumed there shifts the stream. Re-seeding the moment the fixture becomes ready makes
         // the frames that follow consume the same values in every run, on both builds.
-        srand(LOST_TOWER_WALL_RANDOM_SEED);
+        srand(s_definition->randomSeed);
     }
 
     if (ready && !s_ready && s_captureStage == CaptureStage::Waiting)
@@ -179,12 +216,12 @@ bool SceneFixture::ObserveServerSpawn(int map, unsigned char positionX, unsigned
 
 std::optional<unsigned int> SceneFixture::GetRandomSeed()
 {
-    if (!s_active)
+    if (s_definition == nullptr)
     {
         return std::nullopt;
     }
 
-    return LOST_TOWER_WALL_RANDOM_SEED;
+    return s_definition->randomSeed;
 }
 
 bool SceneFixture::ShouldTriggerCaptureForFrame()
@@ -194,7 +231,7 @@ bool SceneFixture::ShouldTriggerCaptureForFrame()
         return false;
     }
 
-    if (s_readyFrameCount < LOST_TOWER_WALL_V1.captureAfterReadyFrames)
+    if (s_readyFrameCount < s_definition->captureAfterReadyFrames)
     {
         ++s_readyFrameCount;
         return false;
@@ -232,7 +269,7 @@ bool SceneFixture::ShouldExitAfterCapturedFrame()
         return false;
     }
 
-    if (s_framesAfterCapture < LOST_TOWER_WALL_V1.exitAfterCaptureFrames)
+    if (s_framesAfterCapture < s_definition->exitAfterCaptureFrames)
     {
         ++s_framesAfterCapture;
         return false;
@@ -244,13 +281,13 @@ bool SceneFixture::ShouldExitAfterCapturedFrame()
 
 const wchar_t* SceneFixture::GetId()
 {
-    return LOST_TOWER_WALL_V1.id.data();
+    return s_definition == nullptr ? L"" : s_definition->id.data();
 }
 
 void SceneFixture::ApplyWorldTime(double& worldTime)
 {
-    if (s_active)
+    if (s_definition != nullptr)
     {
-        worldTime = LOST_TOWER_WALL_V1.worldTime;
+        worldTime = s_definition->worldTime;
     }
 }
