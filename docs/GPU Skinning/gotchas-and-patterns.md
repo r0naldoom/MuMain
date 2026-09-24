@@ -27,6 +27,12 @@
   before another `Animation()` can replace it. Debug builds assert on a deferred
   CPU consumer that observes the replacement; make that transform eager rather
   than copying a stale palette (#547).
+- Debug-only `$bonepalette` reports cumulative shared-palette captures,
+  deferred-consumer validations, and detected divergences. With a confirmed bad
+  frame, `captures == 0` means the capture seam is wrong; `captures > 0` with
+  `validations == 0` means the path does not consume through `EnsureCpu*()`; and
+  positive captures and validations with zero divergences means an uncounted
+  writer or a replaced per-transform request is evading the guard.
 - Cloth, shadow-volume, shadow-map, and vertex-wave paths intentionally remain
   CPU consumers. GPU eligibility must not bypass their materialization calls.
 

@@ -45,6 +45,9 @@ const float (*g_pActiveBoneTransform)[3][4] = nullptr;
 unsigned int g_BoneTransformVersion = 0;
 #ifdef _DEBUG
 static unsigned int g_SharedBonePaletteWriteGeneration = 0;
+static unsigned int g_SharedBonePaletteCaptures = 0;
+static unsigned int g_SharedBonePaletteValidations = 0;
+static unsigned int g_SharedBonePaletteDivergences = 0;
 #endif
 
 void SetActiveBoneTransform(const float (*ptr)[3][4])
@@ -52,6 +55,17 @@ void SetActiveBoneTransform(const float (*ptr)[3][4])
     g_pActiveBoneTransform = ptr;
     ++g_BoneTransformVersion;
 }
+
+#ifdef _DEBUG
+SharedBonePaletteGuardCounters GetSharedBonePaletteGuardCounters()
+{
+    return {
+        .Captures = g_SharedBonePaletteCaptures,
+        .Validations = g_SharedBonePaletteValidations,
+        .Divergences = g_SharedBonePaletteDivergences,
+    };
+}
+#endif
 
 vec3_t VertexTransform[MAX_MESH][MAX_VERTICES];
 vec3_t NormalTransform[MAX_MESH][MAX_VERTICES];
@@ -68,17 +82,39 @@ static bool g_LazyCpuSkin = true; // DXP-20 inc4 Step D: gate flipped on -- see 
 #ifdef _DEBUG
 static void AssertDeferredSharedBonePaletteIsCurrent(const BMD& bmd)
 {
-    if (!bmd.m_DebugDeferredSharedBonePalette ||
-        bmd.m_DebugSharedBonePaletteGeneration == g_SharedBonePaletteWriteGeneration)
+    if (!bmd.m_DebugDeferredSharedBonePalette)
     {
         return;
     }
 
+    ++g_SharedBonePaletteValidations;
+    if (bmd.m_DebugSharedBonePaletteGeneration == g_SharedBonePaletteWriteGeneration)
+    {
+        bmd.m_DebugDeferredSharedBonePalette = false;
+        return;
+    }
+
+    ++g_SharedBonePaletteDivergences;
     g_ErrorReport.Write(
         L"[DXP-20] stale shared BoneTransform before lazy CPU skinning (BMD=%p, captured=%u, current=%u): "
         L"make BMD::Transform skin eagerly for ::BoneTransform before another Animation() overwrites it (#547).\r\n",
         (void*)&bmd, bmd.m_DebugSharedBonePaletteGeneration, g_SharedBonePaletteWriteGeneration);
     assert(!"stale shared BoneTransform before lazy CPU skinning: make BMD::Transform skin eagerly for ::BoneTransform (#547)");
+}
+
+static void AssertDeferredSharedBonePaletteIsNotReplaced(const BMD& bmd)
+{
+    if (!bmd.m_DebugDeferredSharedBonePalette)
+    {
+        return;
+    }
+
+    ++g_SharedBonePaletteDivergences;
+    g_ErrorReport.Write(
+        L"[DXP-20] deferred shared BoneTransform replaced before skinning (BMD=%p, captured=%u, current=%u): "
+        L"make BMD::Transform skin eagerly for ::BoneTransform before another TransformCheap() replaces the request (#547).\r\n",
+        (const void*)&bmd, bmd.m_DebugSharedBonePaletteGeneration, g_SharedBonePaletteWriteGeneration);
+    assert(!"deferred shared BoneTransform replaced before skinning: make BMD::Transform skin eagerly for ::BoneTransform (#547)");
 }
 #endif
 
@@ -394,12 +430,15 @@ void BMD::ClaimSkinStamp() const
 void BMD::TransformCheap(float (*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t BoundingBoxMax, OBB_t* OBB,
                          bool Translate, float _Scale)
 {
-    m_pCurrentBoneTransform = BoneMatrix;
-    SetActiveBoneTransform(BoneMatrix);
 #ifdef _DEBUG
+    AssertDeferredSharedBonePaletteIsNotReplaced(*this);
     m_DebugDeferredSharedBonePalette = BoneMatrix == ::BoneTransform;
     m_DebugSharedBonePaletteGeneration = g_SharedBonePaletteWriteGeneration;
+    if (m_DebugDeferredSharedBonePalette)
+        ++g_SharedBonePaletteCaptures;
 #endif
+    m_pCurrentBoneTransform = BoneMatrix;
+    SetActiveBoneTransform(BoneMatrix);
     m_LastTranslate = Translate;        // persist for RenderMesh GPU skinning path
     m_LastSkinScale = _Scale;           // DXP-20 inc4: stashed for EnsureCpuVertices()
     m_LastBoneScale = BoneScale;        // DXP-20 inc4: snapshot of the global -- callers mutate it right
@@ -1754,11 +1793,17 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     if (skinningPath == Render::Models::GpuSkinningPath::GpuSubmitted)
     {
         FrameProfiler::Count(FrameProfiler::Counter::GpuSkinningSubmissions);
+#ifdef _DEBUG
+        m_DebugDeferredSharedBonePalette = false;
+#endif
         return;
     }
     if (skinningPath == Render::Models::GpuSkinningPath::GpuFailed)
     {
         FrameProfiler::Count(FrameProfiler::Counter::GpuSkinningFailures);
+#ifdef _DEBUG
+        m_DebugDeferredSharedBonePalette = false;
+#endif
         return;
     }
 

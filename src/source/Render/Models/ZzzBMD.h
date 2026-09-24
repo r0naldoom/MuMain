@@ -14,6 +14,17 @@ extern const float (*g_pActiveBoneTransform)[3][4];
 extern unsigned int g_BoneTransformVersion;
 void SetActiveBoneTransform(const float (*ptr)[3][4]);
 
+#ifdef _DEBUG
+struct SharedBonePaletteGuardCounters
+{
+    unsigned int Captures;
+    unsigned int Validations;
+    unsigned int Divergences;
+};
+
+[[nodiscard]] SharedBonePaletteGuardCounters GetSharedBonePaletteGuardCounters();
+#endif
+
 #define MAX_BONES    200
 #define MAX_MESH     50
 #define MAX_VERTICES 15000
@@ -243,7 +254,7 @@ public:
 #ifdef _DEBUG
     // Generation of the shared palette captured by TransformCheap(); EnsureCpu*() asserts before
     // consuming it if another Animation() overwrote the palette in the meantime (#547).
-    bool m_DebugDeferredSharedBonePalette;
+    mutable bool m_DebugDeferredSharedBonePalette;
     unsigned int m_DebugSharedBonePaletteGeneration;
 #endif
 

@@ -74,10 +74,12 @@ Release build:
 - `$effects sprites`, `particles`, `skillmodels`, `boids`, `wingshadow`,
   `joints`, and `wingextralayers`, each with `on/off`.
 
-Twelve additional branches are Debug-only: `$open`, `$close`, `$clear`,
+Thirteen additional branches are Debug-only: `$open`, `$close`, `$clear`,
 `$type_test`, `$texture_info`, `$color_test`, `$mapatt on/off`, `$path on/off`,
-and `$bb on/off`. They remain unavailable in Release; the new socket command
-must report that state instead of inventing a second implementation.
+`$bb on/off`, and `$bonepalette`. `$bonepalette` reports cumulative shared
+bone-palette captures, deferred-consumer validations, and divergences for the
+#547 guard. They remain unavailable in Release; the new socket command must
+report that state instead of inventing a second implementation.
 
 ### Ordering
 
