@@ -142,3 +142,11 @@ consumer. CPU materialization remains authoritative for:
   CPU fallback, and chrome-mode coverage.
 - `glslangValidator`, `spirv-val`, and `spirv-cross` validate the HLSL and
   checked-in SPIR-V/MSL artifacts.
+- Generated shader output includes `shader-compilation.config`; keep it with any
+  checked-in blob update so its compiler versions and executable digests remain auditable.
+
+### Performance comparisons
+
+Measure each configuration in at least two separate client launches and discard
+every first-run window. Report the number of launches and compare only the
+second-run windows; shader content cannot be blamed for a one-time startup cost.
