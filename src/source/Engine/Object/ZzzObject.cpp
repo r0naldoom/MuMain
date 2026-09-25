@@ -6540,7 +6540,7 @@ void RenderItems()
                     o->Position[2] = GetWaterTerrain(o->Position[0], o->Position[1]) + 180;
                 }
 
-                mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::ItemGeometry);
+                mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::GroundItem);
                 RenderPartObject(o, o->Type, NULL, Light, o->Alpha, Items[i].Item.Level, Items[i].Item.ExcellentFlags, Items[i].Item.AncientDiscriminator, true, true, true);
                 mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::None);
                 VectorCopy(vBackup, o->Position);

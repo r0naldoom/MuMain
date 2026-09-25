@@ -8641,7 +8641,7 @@ void RenderWheelWeapon(OBJECT* o)
     vec3_t Light;
     RequestTerrainLight(o->Position[0], o->Position[1], Light);
     VectorAdd(Light, o->Light, Light);
-    mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::ItemGeometry);
+    mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::WeaponEffect);
     RenderPartObject(o, Type, NULL, Light, Alpha, o->Owner->WeaponLevel, 0, 0, true, true, true);
     mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::None);
     o->Type = (short)TempType;

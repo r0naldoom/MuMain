@@ -460,10 +460,15 @@ std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
     std::string category;
     if (request.GetString("category", category))
     {
-        if (category != "item_geometry")
+        if (category == "ground_item")
+            filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::GroundItem);
+        else if (category == "inventory_preview")
+            filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::InventoryPreview);
+        else if (category == "weapon_effect")
+            filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::WeaponEffect);
+        else
             return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "unsupported draw category");
         filter.hasDebugLabel = true;
-        filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::ItemGeometry);
     }
     if (request.GetBool("blend", filter.blendEnabled))
         filter.hasBlend = true;

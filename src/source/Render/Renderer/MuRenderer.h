@@ -172,7 +172,9 @@ enum class RenderDebugLabel : std::uint8_t
 {
     None,
     StaticObjectsComplete,
-    ItemGeometry,
+    GroundItem,
+    InventoryPreview,
+    WeaponEffect,
 };
 
 // ---------------------------------------------------------------------------

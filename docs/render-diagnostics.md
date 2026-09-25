@@ -109,14 +109,14 @@ It also deliberately observes post-merge commands.
 `draw-filter` installs one immutable AND predicate for subsequent frame replay:
 
 ```json
-{"cmd":"draw-filter","category":"item_geometry","only":true}
+{"cmd":"draw-filter","category":"weapon_effect","only":true}
 ```
 
 Every supplied clause must match: `texture_id`, the paired
 `texture_width`/`texture_height`, `blend`, `category`, and inclusive
-`submitted_ordinal_first`/`submitted_ordinal_last`. The sole category is
-`item_geometry`, recorded while drawing ground items, inventory previews, and
-weapon effects. `only:true` replays matching geometry and suppresses everything
+`submitted_ordinal_first`/`submitted_ordinal_last`. Categories are
+`ground_item`, `inventory_preview`, and `weapon_effect`; each identifies its
+recording site. `only:true` replays matching geometry and suppresses everything
 else; without it, matching geometry is suppressed. The ordinal is a fallback
 for blind bisection, never a RenderDoc EID. `{"cmd":"draw-filter","clear":true}`
 removes the predicate and restores unmodified replay.
