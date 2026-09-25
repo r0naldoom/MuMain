@@ -438,6 +438,7 @@ void BMD::TransformCheap(float (*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_
         ++g_SharedBonePaletteCaptures;
 #endif
     m_pCurrentBoneTransform = BoneMatrix;
+    m_UsesSharedGlobalBoneTransform = BoneMatrix == ::BoneTransform;
     SetActiveBoneTransform(BoneMatrix);
     m_LastTranslate = Translate;        // persist for RenderMesh GPU skinning path
     m_LastSkinScale = _Scale;           // DXP-20 inc4: stashed for EnsureCpuVertices()
@@ -1416,6 +1417,25 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     if (texture->IsHair && HideSkin)
     {
         return;
+    }
+    mu::IMuRenderer& renderer = mu::GetRenderer();
+    struct EndDrawDiagnosticScope
+    {
+        mu::IMuRenderer* renderer = nullptr;
+
+        ~EndDrawDiagnosticScope()
+        {
+            if (renderer != nullptr)
+            {
+                renderer->EndDrawDiagnosticScope();
+            }
+        }
+    } diagnosticScope;
+    if (m_UsesSharedGlobalBoneTransform &&
+        renderer.IsDrawDiagnosticScopeEnabled(mu::RenderDebugLabel::SharedBonePalette))
+    {
+        renderer.BeginDrawDiagnosticScope(mu::RenderDebugLabel::SharedBonePalette, BodyOrigin);
+        diagnosticScope.renderer = &renderer;
     }
 
     bool EnableWave = false;

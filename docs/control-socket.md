@@ -85,11 +85,19 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 | `pickup` (`item`) | walk to a drop and take it, by the id `nearby` reports for it |
 | `use` (`slot`), `equip` (`slot`, `target_slot`) | inventory actions |
 | `say` (`text`), `whisper` (`name`, `text`) | chat, including `/` commands |
-| `console` (`text`) | execute a local `$` diagnostic command; never sends chat. Unknown or malformed text returns `bad_request`; a Debug-only command in Release returns `not_allowed`. |
-| `draw-filter` (`texture_id`, `texture_width`/`texture_height`, `blend`, `submitted_ordinal_first`/`submitted_ordinal_last`, `category`, `only`) | suppresses replayed geometry matching every supplied clause; `only:true` replays only matching geometry. Categories are `ground_item`, `inventory_preview`, and `weapon_effect`. `clear:true` restores normal replay. |
-| `draw-diagnostic` (`category`, `frame`) | returns an isolated diagnostic measurement. Phase 1 accepts `ground_item`; `frame` selects the matching recent screenshot frame and it reports each scope's source origin, effective skinning origin, projected bounds, and draw accounting. |
+| `console` (`text`) | execute a local `$` diagnostic command; never sends chat. Unknown or malformed text returns `bad_request`; a Debug-only command in Release returns `not_allowed`. `$skinnedlighting on` enables per-pixel directional lighting for GPU-skinned textured models; `$skinnedlighting off` restores legacy vertex lighting. |
+| `draw-filter` (`texture_id`, `texture_width`/`texture_height`, `blend`, `submitted_ordinal_first`/`submitted_ordinal_last`, `category`, `only`) | suppresses replayed geometry matching every supplied clause; `only:true` replays only matching geometry. Categories are `ground_item`, `inventory_preview`, `weapon_effect`, `shared_bone_palette`, and `character`. `clear:true` restores normal replay. |
+| `draw-diagnostic` (`category`, `frame`) | returns an isolated diagnostic measurement for `ground_item`, `shared_bone_palette`, or `character`. `frame` selects the matching recent screenshot frame and it reports each scope's source origin, effective skinning origin, projected bounds, and draw accounting. |
 | `party` (`action`, `target`) | `invite`, `accept`, `decline`, `leave` |
 | `halt` | stop the walk or repeated attack in progress |
+
+### Skinned per-pixel lighting contract
+
+`$skinnedlighting off` keeps the legacy vertex-Lambert calculation. `$skinnedlighting on`
+moves that identical calculation to the fragment shader for GPU-skinned textured meshes.
+The shared textured interface now carries a normal, a mode, and a light direction for every
+textured draw. Static and 2D draws write mode `0`, so their rendered output remains unchanged;
+this intentionally changes the interpolator signature to avoid a new fragment uniform buffer.
 
 ### Renderer statistics
 
@@ -110,6 +118,14 @@ substitution of a newer draw. Its variable-length scope records are intentionall
 separate from `stats`: `stats` remains the fixed counter snapshot used by map
 sweeps. The result is a measurement, not a pass/fail judgement; `muframe
 live-inspect` records it beside the isolated PNG and socket `state`.
+
+### Character isolation measurement
+
+Set `draw-filter` to `{"category":"character","only":true}`, wait for a later
+frame, then request a `screenshot` and retain its returned `frame`. Read
+`draw-diagnostic` with `{"category":"character","frame":<frame>}`. The scope
+covers each visible world character; battle-castle visual effects render outside
+it.
 
 A scope may have zero projected triangles and no `projected_bbox` when it is
 offscreen or fully clipped. That is a valid live measurement, not a missing

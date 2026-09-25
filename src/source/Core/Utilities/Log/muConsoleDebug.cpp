@@ -22,6 +22,7 @@
 #include "Scenes/MainScene.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Render/Models/ZzzBMD.h"
+#include "Render/Renderer/MuRenderer.h"
 
 #ifdef _EDITOR
 #include "../MuEditor/UI/Console/MuEditorConsoleUI.h"
@@ -132,6 +133,16 @@ bool CmuConsoleDebug::CheckCommand(const std::wstring& strCommand)
     else if (strCommand.compare(L"$vsync off") == 0)
     {
         MuSetVSyncPreference(false);
+        return true;
+    }
+    else if (strCommand.compare(L"$skinnedlighting on") == 0)
+    {
+        mu::GetRenderer().SetSkinnedPerPixelLightingEnabled(true);
+        return true;
+    }
+    else if (strCommand.compare(L"$skinnedlighting off") == 0)
+    {
+        mu::GetRenderer().SetSkinnedPerPixelLightingEnabled(false);
         return true;
     }
     else if (strCommand.compare(L"$effects off") == 0)

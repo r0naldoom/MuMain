@@ -468,6 +468,10 @@ std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
             filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::InventoryPreview);
         else if (category == "weapon_effect")
             filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::WeaponEffect);
+        else if (category == "shared_bone_palette")
+            filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::SharedBonePalette);
+        else if (category == "character")
+            filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::Character);
         else
             return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "unsupported draw category");
         filter.hasDebugLabel = true;

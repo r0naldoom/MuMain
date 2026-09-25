@@ -43,3 +43,17 @@ TEST_CASE("draw filter can replay only matching weapon effects [render][draw-fil
     CHECK_FALSE(filter.Suppresses({42u, 12778u, 16u, 16u, weaponEffect, false}));
     CHECK(filter.Suppresses({42u, 12778u, 16u, 16u, groundItem, false}));
 }
+
+TEST_CASE("draw filter can replay only matching characters [render][draw-filter]")
+{
+    const auto character = static_cast<std::uint8_t>(mu::RenderDebugLabel::Character);
+    const auto weaponEffect = static_cast<std::uint8_t>(mu::RenderDebugLabel::WeaponEffect);
+    Render::DrawFilter filter{};
+    filter.enabled = true;
+    filter.onlyMatches = true;
+    filter.hasDebugLabel = true;
+    filter.debugLabel = character;
+
+    CHECK_FALSE(filter.Suppresses({42u, 12778u, 16u, 16u, character, false}));
+    CHECK(filter.Suppresses({42u, 12778u, 16u, 16u, weaponEffect, false}));
+}

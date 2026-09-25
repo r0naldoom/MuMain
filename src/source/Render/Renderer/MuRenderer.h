@@ -198,6 +198,10 @@ public:
         return false;
     }
 
+    // Chooses fragment lighting for newly submitted GPU-skinned textured meshes.
+    // Disabled preserves the established vertex-lighting path.
+    virtual void SetSkinnedPerPixelLightingEnabled(bool /*enabled*/) {}
+
     // Render a quad strip from world-space vertices (requires >= 4 vertices, even count ideal).
     virtual void RenderQuadStrip(std::span<const Vertex3D> vertices, std::uint32_t textureId) = 0;
 
@@ -207,6 +211,7 @@ public:
     // Applies a semantic label to geometry recorded until the next call.
     virtual void SetDrawDebugLabel(RenderDebugLabel /*label*/) {}
     virtual void BeginDrawDiagnosticScope(RenderDebugLabel /*label*/, const float* /*sourceOrigin*/) {}
+    [[nodiscard]] virtual bool IsDrawDiagnosticScopeEnabled(RenderDebugLabel /*label*/) const { return false; }
     virtual void EndDrawDiagnosticScope() {}
 
     // Set the active alpha-blending equation.

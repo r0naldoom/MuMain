@@ -13,6 +13,8 @@ enum class RenderDebugLabel : std::uint8_t
     GroundItem,
     InventoryPreview,
     WeaponEffect,
+    SharedBonePalette,
+    Character,
 };
 
 struct DrawDiagnosticScope

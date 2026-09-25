@@ -112,6 +112,10 @@ struct SkinningVertexUniforms
 };
 static_assert(sizeof(SkinningVertexUniforms) == 192, "SkinningVertexUniforms must be 192 bytes");
 
+constexpr std::uint32_t kSkinnedLightingDisabled = 0u;
+constexpr std::uint32_t kSkinnedLightingVertex = 1u;
+constexpr std::uint32_t kSkinnedLightingFragment = 2u;
+
 } // anonymous namespace
 
 namespace mu
@@ -604,10 +608,19 @@ static DrawDiagnosticSnapshot s_lastDrawDiagnosticFrame;
 static std::array<DrawDiagnosticSnapshot, 4u> s_drawDiagnosticHistory;
 static std::uint32_t s_activeDrawDiagnosticScope = 0;
 
-[[nodiscard]] static bool IsGroundItemDiagnosticEnabled()
+[[nodiscard]] static RenderDebugLabel ActiveDrawDiagnosticLabel()
 {
-    return s_drawFilter.enabled && s_drawFilter.onlyMatches && s_drawFilter.hasDebugLabel &&
-           s_drawFilter.debugLabel == static_cast<std::uint8_t>(RenderDebugLabel::GroundItem);
+    if (!s_drawFilter.enabled || !s_drawFilter.onlyMatches || !s_drawFilter.hasDebugLabel)
+    {
+        return RenderDebugLabel::None;
+    }
+
+    return static_cast<RenderDebugLabel>(s_drawFilter.debugLabel);
+}
+
+[[nodiscard]] static bool IsActiveDrawDiagnosticScopeEnabled(RenderDebugLabel label)
+{
+    return ActiveDrawDiagnosticLabel() == label;
 }
 
 [[nodiscard]] static DrawDiagnosticScope* ActiveDrawDiagnosticScope()
@@ -620,16 +633,16 @@ static std::uint32_t s_activeDrawDiagnosticScope = 0;
     return &s_drawDiagnosticFrame.scopes[s_activeDrawDiagnosticScope - 1u];
 }
 
-static void BeginGroundItemDiagnosticScope(const float* sourceOrigin)
+static void StartDrawDiagnosticScope(RenderDebugLabel label, const float* sourceOrigin)
 {
-    if (!IsGroundItemDiagnosticEnabled() || sourceOrigin == nullptr)
+    if (!IsActiveDrawDiagnosticScopeEnabled(label) || sourceOrigin == nullptr)
     {
         return;
     }
 
     DrawDiagnosticScope scope;
     scope.ordinal = static_cast<std::uint32_t>(s_drawDiagnosticFrame.scopes.size() + 1u);
-    scope.label = RenderDebugLabel::GroundItem;
+    scope.label = label;
     scope.sourceOrigin[0] = sourceOrigin[0];
     scope.sourceOrigin[1] = sourceOrigin[1];
     scope.sourceOrigin[2] = sourceOrigin[2];
@@ -770,7 +783,7 @@ void CaptureLastFrameStats()
     s_lastFrameStats.batchBreakOther = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakOther);
     s_lastFrameStats.frameProfilerTextureUploads = FrameProfiler::CounterValue(FrameProfiler::Counter::TextureUploads);
     s_lastDrawDiagnosticFrame = s_drawDiagnosticFrame;
-    if (s_drawDiagnosticFrame.label == RenderDebugLabel::GroundItem)
+    if (s_drawDiagnosticFrame.label != RenderDebugLabel::None)
     {
         s_drawDiagnosticHistory[s_drawDiagnosticFrame.frame % s_drawDiagnosticHistory.size()] = s_drawDiagnosticFrame;
     }
@@ -784,9 +797,9 @@ constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-object
     {
     case RenderDebugLabel::StaticObjectsComplete:
         return kStaticObjectsCompleteDebugLabel;
+    default:
+        return nullptr;
     }
-
-    return nullptr;
 }
 
 [[nodiscard]] static bool IsDrawCommand(RenderCmdType type)
@@ -1964,10 +1977,11 @@ public:
             FailPendingFrameReadback();
             return;
         }
-        if (IsGroundItemDiagnosticEnabled())
+        const RenderDebugLabel diagnosticLabel = ActiveDrawDiagnosticLabel();
+        if (diagnosticLabel != RenderDebugLabel::None)
         {
             s_drawDiagnosticFrame.frame = s_dbgFrameCount;
-            s_drawDiagnosticFrame.label = RenderDebugLabel::GroundItem;
+            s_drawDiagnosticFrame.label = diagnosticLabel;
             s_drawDiagnosticFrame.viewportWidth = s_swapW;
             s_drawDiagnosticFrame.viewportHeight = s_swapH;
         }
@@ -2723,6 +2737,11 @@ public:
     void SetStatsEnabled(bool enabled) override
     {
         s_statsEnabled = enabled;
+    }
+
+    void SetSkinnedPerPixelLightingEnabled(bool enabled) override
+    {
+        m_skinnedPerPixelLightingEnabled = enabled;
     }
 
     [[nodiscard]] RendererStats GetFrameStats() const override
@@ -3525,7 +3544,7 @@ public:
         cmd.skinningVu.palette[0] = paletteRowOffset;
         cmd.skinningVu.palette[1] = static_cast<std::uint32_t>(parameters.boneMatrices.size() / 12);
         cmd.skinningVu.palette[2] = parameters.translate ? 1u : 0u;
-        cmd.skinningVu.palette[3] = parameters.lightEnabled ? 1u : 0u;
+        cmd.skinningVu.palette[3] = GetSkinnedLightingMode(parameters.lightEnabled);
         cmd.skinningVu.lightDirection[0] = parameters.lightDirection[0];
         cmd.skinningVu.lightDirection[1] = parameters.lightDirection[1];
         cmd.skinningVu.lightDirection[2] = parameters.lightDirection[2];
@@ -3668,17 +3687,36 @@ public:
         m_drawDebugLabel = label;
     }
 
+    [[nodiscard]] bool IsDrawDiagnosticScopeEnabled(RenderDebugLabel label) const override
+    {
+        return IsActiveDrawDiagnosticScopeEnabled(label);
+    }
+
     void BeginDrawDiagnosticScope(RenderDebugLabel label, const float* sourceOrigin) override
     {
-        m_drawDebugLabel = label;
-        if (label == RenderDebugLabel::GroundItem)
+        if (IsDrawDiagnosticScopeEnabled(label))
         {
-            BeginGroundItemDiagnosticScope(sourceOrigin);
+            m_drawDiagnosticScopeStack.push_back({m_drawDebugLabel, s_activeDrawDiagnosticScope});
+            m_drawDebugLabel = label;
+            StartDrawDiagnosticScope(label, sourceOrigin);
+            return;
         }
+
+        m_drawDebugLabel = label;
     }
 
     void EndDrawDiagnosticScope() override
     {
+        if (!m_drawDiagnosticScopeStack.empty())
+        {
+            const DrawDiagnosticScopeState previous = m_drawDiagnosticScopeStack.back();
+            m_drawDiagnosticScopeStack.pop_back();
+            CloseDrawDiagnosticScope();
+            m_drawDebugLabel = previous.label;
+            s_activeDrawDiagnosticScope = previous.scope;
+            return;
+        }
+
         CloseDrawDiagnosticScope();
         m_drawDebugLabel = RenderDebugLabel::None;
     }
@@ -3922,9 +3960,25 @@ private:
         return static_cast<std::uint32_t>(m_boundTextureId);
     }
 
+    [[nodiscard]] std::uint32_t GetSkinnedLightingMode(bool lightEnabled) const
+    {
+        if (!lightEnabled)
+        {
+            return kSkinnedLightingDisabled;
+        }
+
+        return m_skinnedPerPixelLightingEnabled ? kSkinnedLightingFragment : kSkinnedLightingVertex;
+    }
+
     // Per-instance render state.
     BlendMode m_activeBlendMode = BlendMode::Alpha;
     RenderDebugLabel m_drawDebugLabel = RenderDebugLabel::None;
+    struct DrawDiagnosticScopeState
+    {
+        RenderDebugLabel label;
+        std::uint32_t scope;
+    };
+    std::vector<DrawDiagnosticScopeState> m_drawDiagnosticScopeStack;
     bool m_blendEnabled = true;
     bool m_depthTestEnabled = true;
     bool m_depthMaskEnabled = true;
@@ -3933,6 +3987,7 @@ private:
     bool m_texture2DEnabled = true;
     bool m_fogEnabled = false;
     bool m_colorWriteEnabled = true;
+    bool m_skinnedPerPixelLightingEnabled = false;
     bool m_stencilTestEnabled = false;
     int m_boundTextureId = -1;
     FogParams m_fogParams{};

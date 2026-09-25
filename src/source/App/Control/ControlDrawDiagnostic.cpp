@@ -15,6 +15,25 @@ using App::Control::Request;
 using json = nlohmann::json;
 
 constexpr std::string_view GroundItemCategory = "ground_item";
+constexpr std::string_view SharedBonePaletteCategory = "shared_bone_palette";
+constexpr std::string_view CharacterCategory = "character";
+
+std::optional<mu::RenderDebugLabel> LabelForCategory(std::string_view category)
+{
+    if (category == GroundItemCategory)
+    {
+        return mu::RenderDebugLabel::GroundItem;
+    }
+    if (category == SharedBonePaletteCategory)
+    {
+        return mu::RenderDebugLabel::SharedBonePalette;
+    }
+    if (category == CharacterCategory)
+    {
+        return mu::RenderDebugLabel::Character;
+    }
+    return std::nullopt;
+}
 
 json Position(const float* value)
 {
@@ -55,9 +74,16 @@ namespace App::Control::Diagnostics
 std::string Draw(const Request& request)
 {
     std::string category;
-    if (!request.GetString("category", category) || category != GroundItemCategory)
+    if (!request.GetString("category", category))
     {
-        return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "draw-diagnostic needs category ground_item");
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest,
+                           "draw-diagnostic needs category ground_item, shared_bone_palette, or character");
+    }
+    const std::optional<mu::RenderDebugLabel> label = LabelForCategory(category);
+    if (!label)
+    {
+        return EncodeError(request.EncodedId(), ErrorCode::BadRequest,
+                           "draw-diagnostic needs category ground_item, shared_bone_palette, or character");
     }
 
     int requestedFrame = 0;
@@ -68,15 +94,15 @@ std::string Draw(const Request& request)
 
     const mu::DrawDiagnosticSnapshot snapshot =
         mu::GetRenderer().GetDrawDiagnosticSnapshot(static_cast<std::uint32_t>(requestedFrame));
-    if (snapshot.label != mu::RenderDebugLabel::GroundItem)
+    if (snapshot.label != *label)
     {
         return EncodeError(request.EncodedId(), ErrorCode::Failed,
-                           "no complete ground_item isolation frame is available");
+                           std::string("no complete ") + category + " isolation frame is available");
     }
 
     json result;
     result["frame"] = snapshot.frame;
-    result["category"] = GroundItemCategory;
+    result["category"] = category;
     result["viewport"] = {snapshot.viewportWidth, snapshot.viewportHeight};
     result["scopes"] = json::array();
     for (const mu::DrawDiagnosticScope& scope : snapshot.scopes)

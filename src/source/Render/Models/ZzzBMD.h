@@ -231,6 +231,7 @@ public:
     bool				m_bCompletedAlloc;
 
     float (*m_pCurrentBoneTransform)[3][4]; // Active bone matrix palette stored during Transform()
+    bool m_UsesSharedGlobalBoneTransform;   // Palette was the global BoneTransform at TransformCheap() time.
     bool m_LastTranslate;       // Set by Transform(): true=Translate mode (BodyOrigin/BodyScale shift world pos),
                                 // false=non-Translate mode (bone matrices already encode world position)
     vec3_t m_LastLightPosition; // Set by Transform() when LightEnable: the per-body light direction
@@ -260,8 +261,8 @@ public:
 
     BMD()
         : NumBones(0), NumActions(0), NumMeshs(0), Meshs(NULL), Bones(NULL), Actions(NULL), Textures(NULL),
-          IndexTexture(NULL), m_pCurrentBoneTransform(nullptr), m_LastTranslate(false), m_SkinStamp(0),
-          m_LastSkinScale(0.f), m_LastBoneScale(1.f)
+          IndexTexture(NULL), m_pCurrentBoneTransform(nullptr), m_UsesSharedGlobalBoneTransform(false),
+          m_LastTranslate(false), m_SkinStamp(0), m_LastSkinScale(0.f), m_LastBoneScale(1.f)
 #ifdef _DEBUG
           , m_DebugDeferredSharedBonePalette(false), m_DebugSharedBonePaletteGeneration(0)
 #endif
