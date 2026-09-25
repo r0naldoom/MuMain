@@ -18,6 +18,20 @@ mu_add_test(
 )
 
 mu_add_test(
+    NAME draw_filter_tests
+    SOURCES
+        test_draw_filter.cpp
+        ${CMAKE_SOURCE_DIR}/src/source/Render/Renderer/DrawFilter.cpp
+)
+
+mu_add_test(
+    NAME draw_diagnostic_projection_tests
+    SOURCES
+        test_draw_diagnostic_projection.cpp
+        ${CMAKE_SOURCE_DIR}/src/source/Render/Renderer/DrawDiagnosticProjection.cpp
+)
+
+mu_add_test(
     NAME sdl_gpu_replay_state_tests
     SOURCES
         test_sdl_gpu_replay_state.cpp

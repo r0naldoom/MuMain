@@ -21,6 +21,8 @@
 #include "Scenes/SceneManager.h"
 #include "Scenes/MainScene.h"
 #include "UI/NewUI/NewUISystem.h"
+#include "Render/Models/ZzzBMD.h"
+#include "Render/Renderer/MuRenderer.h"
 
 #ifdef _EDITOR
 #include "../MuEditor/UI/Console/MuEditorConsoleUI.h"
@@ -131,6 +133,16 @@ bool CmuConsoleDebug::CheckCommand(const std::wstring& strCommand)
     else if (strCommand.compare(L"$vsync off") == 0)
     {
         MuSetVSyncPreference(false);
+        return true;
+    }
+    else if (strCommand.compare(L"$skinnedlighting on") == 0)
+    {
+        mu::GetRenderer().SetSkinnedPerPixelLightingEnabled(true);
+        return true;
+    }
+    else if (strCommand.compare(L"$skinnedlighting off") == 0)
+    {
+        mu::GetRenderer().SetSkinnedPerPixelLightingEnabled(false);
         return true;
     }
     else if (strCommand.compare(L"$effects off") == 0)
@@ -246,6 +258,17 @@ bool CmuConsoleDebug::CheckCommand(const std::wstring& strCommand)
         SetMaxMessagePerCycle(message_limit);
         return true;
     }
+
+#ifdef _DEBUG
+    else if (strCommand.compare(L"$bonepalette") == 0)
+    {
+        const SharedBonePaletteGuardCounters counters = GetSharedBonePaletteGuardCounters();
+        g_ErrorReport.Write(
+            L"[DXP-20] Shared BoneTransform guard: captures=%u validations=%u divergences=%u\r\n",
+            counters.Captures, counters.Validations, counters.Divergences);
+        return true;
+    }
+#endif
 
 #ifdef CSK_LH_DEBUG_CONSOLE
     if (!m_bInit)

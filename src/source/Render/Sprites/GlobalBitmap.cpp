@@ -24,7 +24,7 @@
 
 namespace mu
 {
-void RegisterTexture(std::uint32_t id, void* pTex);
+void RegisterTexture(std::uint32_t id, void* texture, std::uint32_t width, std::uint32_t height);
 void UnregisterTexture(std::uint32_t id);
 void RegisterSampler(std::uint32_t id, void* pSampler);
 void UnregisterSampler(std::uint32_t id);
@@ -536,12 +536,10 @@ bool CGlobalBitmap::LoadImage(GLuint uiBitmapIndex, const std::wstring& filename
     {
 #ifdef _DEBUG
         static unsigned int uiCnt2 = 0;
-        int iBuff;
-        iBuff = 0;
 
         wchar_t szDebugOutput[256];
 
-        iBuff = iBuff + mu_swprintf(iBuff + szDebugOutput, L"%d. Call No CLAMP & No REPEAT. \n", uiCnt2++);
+        mu_swprintf_s(szDebugOutput, L"%d. Call No CLAMP & No REPEAT. \n", uiCnt2++);
         OutputDebugString(szDebugOutput);
 #endif
     }
@@ -883,7 +881,8 @@ bool CGlobalBitmap::OpenJpegTurbo(GLuint uiBitmapIndex, const std::wstring& file
     SDL_GPUTexture* rawTexture = pNewBitmap->sdlTexture;
     SDL_GPUSampler* rawSampler = pNewBitmap->sdlSampler;
     m_mapBitmap.insert(type_bitmap_map::value_type(uiBitmapIndex, std::move(pNewBitmap)));
-    mu::RegisterTexture(uiBitmapIndex, rawTexture);
+    mu::RegisterTexture(uiBitmapIndex, rawTexture, static_cast<std::uint32_t>(textureWidth),
+                        static_cast<std::uint32_t>(textureHeight));
     mu::RegisterSampler(uiBitmapIndex, rawSampler);
 
     return true;
@@ -976,7 +975,7 @@ bool CGlobalBitmap::OpenTga(GLuint uiBitmapIndex, const std::wstring& filename, 
     SDL_GPUTexture* rawTexture = pNewBitmap->sdlTexture;
     SDL_GPUSampler* rawSampler = pNewBitmap->sdlSampler;
     m_mapBitmap.insert(type_bitmap_map::value_type(uiBitmapIndex, std::move(pNewBitmap)));
-    mu::RegisterTexture(uiBitmapIndex, rawTexture);
+    mu::RegisterTexture(uiBitmapIndex, rawTexture, static_cast<std::uint32_t>(Width), static_cast<std::uint32_t>(Height));
     mu::RegisterSampler(uiBitmapIndex, rawSampler);
 
     return true;

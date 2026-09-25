@@ -9696,7 +9696,9 @@ void RenderObjectScreen(int Type, int ItemLevel, int excellentFlags, int ancient
 
     Vector(1.f, 1.f, 1.f, Light);
 
+    mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::InventoryPreview);
     RenderPartObject(o, Type, NULL, Light, alpha, ItemLevel, excellentFlags, ancientDiscriminator, true, true, true);
+    mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::None);
 }
 
 bool UI::Items::ShouldAnimatePreview(bool pointerInside, bool pickedItemActive, bool renderingPickedItem)

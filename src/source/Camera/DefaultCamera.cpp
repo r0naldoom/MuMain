@@ -391,8 +391,6 @@ bool DefaultCamera::Update()
 
     UpdateCameraDistance();
 
-    // Phase 5 fix: Update frustum only when camera state actually changes
-    // This avoids expensive frustum rebuild every frame (20-25% performance gain)
     if (NeedsFrustumUpdate())
     {
         UpdateFrustum();

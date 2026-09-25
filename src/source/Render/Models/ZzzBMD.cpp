@@ -43,12 +43,29 @@ vec3_t BoundingMax[MAX_BONES];
 float  BoneTransform[MAX_BONES][3][4];
 const float (*g_pActiveBoneTransform)[3][4] = nullptr;
 unsigned int g_BoneTransformVersion = 0;
+#ifdef _DEBUG
+static unsigned int g_SharedBonePaletteWriteGeneration = 0;
+static unsigned int g_SharedBonePaletteCaptures = 0;
+static unsigned int g_SharedBonePaletteValidations = 0;
+static unsigned int g_SharedBonePaletteDivergences = 0;
+#endif
 
 void SetActiveBoneTransform(const float (*ptr)[3][4])
 {
     g_pActiveBoneTransform = ptr;
     ++g_BoneTransformVersion;
 }
+
+#ifdef _DEBUG
+SharedBonePaletteGuardCounters GetSharedBonePaletteGuardCounters()
+{
+    return {
+        .Captures = g_SharedBonePaletteCaptures,
+        .Validations = g_SharedBonePaletteValidations,
+        .Divergences = g_SharedBonePaletteDivergences,
+    };
+}
+#endif
 
 vec3_t VertexTransform[MAX_MESH][MAX_VERTICES];
 vec3_t NormalTransform[MAX_MESH][MAX_VERTICES];
@@ -61,6 +78,45 @@ vec3_t LightTransform[MAX_MESH][MAX_VERTICES];
 // g_LazyCpuSkin is a kill switch -- false reproduces pre-increment-4 eager behavior exactly.
 static uint32_t g_SkinStampCounter = 0;
 static bool g_LazyCpuSkin = true; // DXP-20 inc4 Step D: gate flipped on -- see DXP-20-inc4-plan.md
+
+#ifdef _DEBUG
+static void AssertDeferredSharedBonePaletteIsCurrent(const BMD& bmd)
+{
+    if (!bmd.m_DebugDeferredSharedBonePalette)
+    {
+        return;
+    }
+
+    ++g_SharedBonePaletteValidations;
+    if (bmd.m_DebugSharedBonePaletteGeneration == g_SharedBonePaletteWriteGeneration)
+    {
+        bmd.m_DebugDeferredSharedBonePalette = false;
+        return;
+    }
+
+    ++g_SharedBonePaletteDivergences;
+    g_ErrorReport.Write(
+        L"[DXP-20] stale shared BoneTransform before lazy CPU skinning (BMD=%p, captured=%u, current=%u): "
+        L"make BMD::Transform skin eagerly for ::BoneTransform before another Animation() overwrites it (#547).\r\n",
+        (void*)&bmd, bmd.m_DebugSharedBonePaletteGeneration, g_SharedBonePaletteWriteGeneration);
+    assert(!"stale shared BoneTransform before lazy CPU skinning: make BMD::Transform skin eagerly for ::BoneTransform (#547)");
+}
+
+static void AssertDeferredSharedBonePaletteIsNotReplaced(const BMD& bmd)
+{
+    if (!bmd.m_DebugDeferredSharedBonePalette)
+    {
+        return;
+    }
+
+    ++g_SharedBonePaletteDivergences;
+    g_ErrorReport.Write(
+        L"[DXP-20] deferred shared BoneTransform replaced before skinning (BMD=%p, captured=%u, current=%u): "
+        L"make BMD::Transform skin eagerly for ::BoneTransform before another TransformCheap() replaces the request (#547).\r\n",
+        (const void*)&bmd, bmd.m_DebugSharedBonePaletteGeneration, g_SharedBonePaletteWriteGeneration);
+    assert(!"deferred shared BoneTransform replaced before skinning: make BMD::Transform skin eagerly for ::BoneTransform (#547)");
+}
+#endif
 
 vec3_t RenderArrayVertices[MAX_VERTICES * 3];
 vec4_t RenderArrayColors[MAX_VERTICES * 3];
@@ -335,7 +391,12 @@ void BMD::Animation(float (*BoneMatrix)[3][4], float AnimationFrame, float Prior
         BoneMatrix[i][2][2] = 1.f;
         BoneMatrix[i][2][3] = 0.f;
     }
+#ifdef _DEBUG
+    if (BoneMatrix == ::BoneTransform)
+        ++g_SharedBonePaletteWriteGeneration;
+#endif
 }
+
 
 extern EGameScene SceneFlag;
 extern int EditFlag;
@@ -369,7 +430,15 @@ void BMD::ClaimSkinStamp() const
 void BMD::TransformCheap(float (*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t BoundingBoxMax, OBB_t* OBB,
                          bool Translate, float _Scale)
 {
+#ifdef _DEBUG
+    AssertDeferredSharedBonePaletteIsNotReplaced(*this);
+    m_DebugDeferredSharedBonePalette = BoneMatrix == ::BoneTransform;
+    m_DebugSharedBonePaletteGeneration = g_SharedBonePaletteWriteGeneration;
+    if (m_DebugDeferredSharedBonePalette)
+        ++g_SharedBonePaletteCaptures;
+#endif
     m_pCurrentBoneTransform = BoneMatrix;
+    m_UsesSharedGlobalBoneTransform = BoneMatrix == ::BoneTransform;
     SetActiveBoneTransform(BoneMatrix);
     m_LastTranslate = Translate;        // persist for RenderMesh GPU skinning path
     m_LastSkinScale = _Scale;           // DXP-20 inc4: stashed for EnsureCpuVertices()
@@ -485,6 +554,9 @@ void BMD::EnsureCpuVertices(int mesh) const
         return;
     if (m_CpuVertsReady[mesh])
         return;
+#ifdef _DEBUG
+    AssertDeferredSharedBonePaletteIsCurrent(*this);
+#endif
 
     SkinVertices(mesh, m_pCurrentBoneTransform, m_LastTranslate, m_LastSkinScale);
     m_CpuVertsReady[mesh] = true;
@@ -505,6 +577,9 @@ void BMD::EnsureCpuNormals(int mesh) const
         return;
     if (m_CpuNormalsReady[mesh])
         return;
+#ifdef _DEBUG
+    AssertDeferredSharedBonePaletteIsCurrent(*this);
+#endif
 
     const Mesh_t* m = &Meshs[mesh];
     for (int j = 0; j < m->NumNormals; j++)
@@ -545,7 +620,13 @@ void BMD::Transform(float (*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Bou
     // TransformCheap()'s header comment -- same restriction that already applied to it in
     // increment 2). fTransformedSize is intentionally left stale on the lazy path in both Debug
     // and Release builds (see DXP-20-inc4-plan.md) -- its only consumer already floors the result.
-    if (g_LazyCpuSkin && EditFlag != 2)
+    //
+    // Deferring is only safe for a palette the object owns. RenderItems, the inventory preview and
+    // the weapon-effect path all pass the shared global BoneTransform, and the next object's
+    // Animation() overwrites it before the deferred consumer reads it -- the item then skins to
+    // whatever pose happened to be there. Those callers skin eagerly.
+    const bool usesSharedGlobalBoneTransform = BoneMatrix == BoneTransform;
+    if (g_LazyCpuSkin && EditFlag != 2 && !usesSharedGlobalBoneTransform)
         return;
 
     vec3_t BoundingMin;
@@ -638,6 +719,9 @@ void BMD::Transform(float (*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Bou
     fTransformedSize =
         std::max<float>(std::max<float>(BoundingMax[0] - BoundingMin[0], BoundingMax[1] - BoundingMin[1]),
                         BoundingMax[2] - BoundingMin[2]);
+#ifdef _DEBUG
+    m_DebugDeferredSharedBonePalette = false;
+#endif
 }
 
 void BMD::TransformByObjectBone(vec3_t vResultPosition, OBJECT* pObject, int iBoneNumber, vec3_t vRelativePosition)
@@ -851,6 +935,10 @@ void BMD::AnimationTransformWithAttachHighModel_usingGlobalTM(OBJECT* oHighHiera
             BoneTransform[i_][2][3],
             arrOutSetfAllBonePositions[i_]);
     }
+
+#ifdef _DEBUG
+    ++g_SharedBonePaletteWriteGeneration;
+#endif
 
     if (true == bApplyTMtoVertices)
     {
@@ -1330,6 +1418,25 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     {
         return;
     }
+    mu::IMuRenderer& renderer = mu::GetRenderer();
+    struct EndDrawDiagnosticScope
+    {
+        mu::IMuRenderer* renderer = nullptr;
+
+        ~EndDrawDiagnosticScope()
+        {
+            if (renderer != nullptr)
+            {
+                renderer->EndDrawDiagnosticScope();
+            }
+        }
+    } diagnosticScope;
+    if (m_UsesSharedGlobalBoneTransform &&
+        renderer.IsDrawDiagnosticScopeEnabled(mu::RenderDebugLabel::SharedBonePalette))
+    {
+        renderer.BeginDrawDiagnosticScope(mu::RenderDebugLabel::SharedBonePalette, BodyOrigin);
+        diagnosticScope.renderer = &renderer;
+    }
 
     bool EnableWave = false;
     int streamMesh = static_cast<u_char>(this->StreamMesh);
@@ -1712,11 +1819,17 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     if (skinningPath == Render::Models::GpuSkinningPath::GpuSubmitted)
     {
         FrameProfiler::Count(FrameProfiler::Counter::GpuSkinningSubmissions);
+#ifdef _DEBUG
+        m_DebugDeferredSharedBonePalette = false;
+#endif
         return;
     }
     if (skinningPath == Render::Models::GpuSkinningPath::GpuFailed)
     {
         FrameProfiler::Count(FrameProfiler::Counter::GpuSkinningFailures);
+#ifdef _DEBUG
+        m_DebugDeferredSharedBonePalette = false;
+#endif
         return;
     }
 

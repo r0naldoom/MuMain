@@ -11405,6 +11405,28 @@ void RenderCharacter(CHARACTER* c, OBJECT* o, int Select)
     }
 }
 
+namespace
+{
+
+void RenderVisibleCharacter(CHARACTER* character, OBJECT* object, int characterIndex)
+{
+    mu::GetRenderer().BeginDrawDiagnosticScope(mu::RenderDebugLabel::Character, object->Position);
+    if (characterIndex != SelectedCharacter && characterIndex != SelectedNpc)
+        RenderCharacter(character, object);
+    else
+        RenderCharacter(character, object, true);
+    mu::GetRenderer().EndDrawDiagnosticScope();
+
+    if (object->Type == MODEL_PLAYER)
+        battleCastle::CreateBattleCastleCharacter_Visual(character, object);
+
+#ifdef _EDITOR
+    if (s_bShowCharacterPickBoxes)
+        RenderCharacterPickBoxDebug(object);
+#endif
+}
+
+} // namespace
 void RenderCharactersClient()
 {
 #ifdef _EDITOR
@@ -11470,18 +11492,7 @@ void RenderCharactersClient()
         {
             if (o->Visible)
             {
-                if (i != SelectedCharacter && i != SelectedNpc)
-                    RenderCharacter(c, o);
-                else
-                    RenderCharacter(c, o, true);
-
-                if (o->Type == MODEL_PLAYER)
-                    battleCastle::CreateBattleCastleCharacter_Visual(c, o);
-
-#ifdef _EDITOR
-                if (s_bShowCharacterPickBoxes)
-                    RenderCharacterPickBoxDebug(o);
-#endif
+                RenderVisibleCharacter(c, o, i);
             }
         }
     }

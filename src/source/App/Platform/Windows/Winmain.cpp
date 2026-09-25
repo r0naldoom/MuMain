@@ -2,9 +2,11 @@
 ///////////////////////////////////////////////////////////////////////////////
 #include "stdafx.h"
 #include "Core/Input/KeyState.h"
+#include "App/Control/ControlServer.h"
+#include "Core/Text/Utf8.h"
 #include "App/Platform/DiagnosticFrameCaptureSchedule.h"
 #include "App/Platform/DiagnosticFrameCaptureWriter.h"
-
+#include "App/Platform/RenderDocCapture.h"
 #define WIN32_LEAN_AND_MEAN
 #define WIN32_EXTRA_LEAN
 
@@ -27,6 +29,7 @@
 #include "Engine/Object/ZzzOpenData.h"
 #include "Scenes/SceneCore.h"
 #include "Scenes/SceneManager.h"
+#include "Scenes/SceneFixture.h"
 #include "Network/Reconnect/ReconnectManager.h"
 #include "Network/IncomingPacketQueue.h"
 #include "Core/Time/FrameTimerScheduler.h"
@@ -1324,6 +1327,7 @@ void MuApplyWindowResolution(unsigned int width, unsigned int height, bool windo
 MSG MainLoop()
 {
     constexpr auto target_resolution = 1;
+    std::uint64_t renderedFrameCount = 0;
     auto precise = timeBeginPeriod(target_resolution);
 
     HandleFocusChange(Core::Platform::HasSDLWindowInputFocus(SDL_GetWindowFlags(g_sdlWindow)));
@@ -1353,6 +1357,13 @@ MSG MainLoop()
             switch (event.type)
             {
             case SDL_EVENT_QUIT:
+                Destroy = true;
+                break;
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                // Titlebar X / Alt+F4. Close on this event directly instead of relying
+                // solely on the SDL_EVENT_QUIT SDL derives from it - depending on that
+                // indirection left the first close press with no visible effect, only
+                // closing the window on a second press (#535).
                 Destroy = true;
                 break;
             case SDL_EVENT_MOUSE_MOTION:
@@ -1490,6 +1501,12 @@ MSG MainLoop()
         // Fire any due timers. Replaces the Win32 SetTimer/WM_TIMER dispatch.
         Core::Time::FrameTimerScheduler::Instance().Tick();
 
+        // Serve the control socket, after this frame's packets have been
+        // processed so a command sees the newest game state, and before
+        // rendering so an act's step is drawn in the same frame. Does nothing
+        // when the socket was never opened.
+        App::Control::ControlServer::Instance().Poll();
+
         if (CheckRenderNextFrame())
         {
             if (g_bUseWindowMode || g_bWndActive || g_HasInactiveFpsOverride)
@@ -1518,10 +1535,33 @@ MSG MainLoop()
 
                 RequestDiagnosticFrameCapture();
                 ApplyPendingVSyncPreference();
+                const std::uint64_t frameNumber = ++renderedFrameCount;
+                if (SceneFixture::ShouldTriggerCaptureForFrame())
+                {
+                    if (App::Platform::RenderDoc::TriggerCapture())
+                    {
+                        SceneFixture::NotifyCaptureTriggered();
+                        mu::log::Get("capture")->info(
+                            "[SceneFixture] requested RenderDoc capture at frame {}; RenderDoc will capture frame {}",
+                            frameNumber, frameNumber + 1);
+                    }
+                    else
+                    {
+                        SceneFixture::NotifyCaptureSkipped();
+                        mu::log::Get("capture")->info(
+                            "[SceneFixture] RenderDoc is unavailable; automatic capture was skipped");
+                    }
+                }
                 mu::GetRenderer().BeginFrame();
                 RenderScene(g_hDC);
                 mu::GetRenderer().EndFrame();
                 ConsumeDiagnosticFrameCapture();
+                if (SceneFixture::ShouldExitAfterCapturedFrame())
+                {
+                    mu::log::Get("capture")->info(
+                        "[SceneFixture] requesting clean shutdown after capture at frame {}", frameNumber);
+                    PostQuitMessage(0);
+                }
             }
         }
         else
@@ -1788,6 +1828,10 @@ static void ShutdownRuntime(std::thread& cpuUsageRecorder)
 {
     // The recorder polls process state until Destroy is set.
     Destroy = true;
+
+    // Closes the control socket and removes its file, so a later client with
+    // the same name does not find a live-looking socket.
+    App::Control::ControlServer::Instance().Stop();
     if (cpuUsageRecorder.joinable())
     {
         cpuUsageRecorder.join();
@@ -1799,8 +1843,22 @@ static void ShutdownRuntime(std::thread& cpuUsageRecorder)
 #endif
 
     // Complete the final submitted frame before UI and bitmap owners release
-    // textures referenced by it. This keeps Metal teardown deterministic.
+    // textures referenced by it. This keeps Metal teardown deterministic. Do
+    // this while the window is still visible: the compositor can stop
+    // servicing a hidden/occluded window's swapchain, leaving this wait
+    // stuck on a present fence that only signals once something (e.g. a
+    // focus change) forces the compositor to redraw (#535).
     mu::WaitForSDLGpuIdle();
+
+    // Hide the window before the teardown below, which pumps no messages and
+    // can take a noticeable moment (asset/UI release, ...). Left visible, the
+    // OS flags it as unresponsive and closing needs a second click to force
+    // the resulting ghost window away (#535).
+    if (g_sdlWindow != nullptr)
+    {
+        SDL_HideWindow(g_sdlWindow);
+    }
+
     UnregisterBundledFonts();
     DestroyWindow();
     ShutdownRendererWindow();
@@ -1870,6 +1928,9 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     std::wstring portableCommandLine = BuildPortableCommandLine(szCmdLine);
     wchar_t* lpszCommandLine = portableCommandLine.data();
 #endif
+    // Linux forwards argv through szCmdLine; use the platform-neutral command line here.
+    SceneFixture::ConfigureFromCommandLine(lpszCommandLine);
+
     wchar_t lpszFile[MAX_PATH];
     WORD wVersion[4] = {
         0,
@@ -1945,6 +2006,14 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     g_bUseWindowMode = GameConfig::GetInstance().GetWindowMode() ? TRUE : FALSE;
     g_bUseFullscreenMode = !g_bUseWindowMode;
 
+    if (const auto targetWindowSize = SceneFixture::GetTargetWindowSize())
+    {
+        WindowWidth = targetWindowSize->width;
+        WindowHeight = targetWindowSize->height;
+        g_bUseWindowMode = TRUE;
+        g_bUseFullscreenMode = FALSE;
+    }
+
     // Apply audio settings from INI — volume 0 = off, >0 = on
     m_SoundOnOff = (GameConfig::GetInstance().GetSoundVolume() > 0) ? 1 : 0;
     m_MusicOnOff = (GameConfig::GetInstance().GetMusicVolume() > 0) ? 1 : 0;
@@ -1982,7 +2051,13 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     // SDL owns the window; SDL_gpu owns the rendering device.
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
     {
-        g_ErrorReport.Write(L"> SDL video init failed.\r\n");
+        const char* requestedVideoDriver = SDL_GetHint(SDL_HINT_VIDEO_DRIVER);
+        const std::wstring requestedDriver = requestedVideoDriver != nullptr && requestedVideoDriver[0] != '\0'
+                                                 ? Utf8ToWide(requestedVideoDriver)
+                                                 : L"auto";
+        const std::wstring videoInitError = Utf8ToWide(SDL_GetError());
+        g_ErrorReport.Write(L"> SDL video init failed. Requested driver: %ls. SDL error: %ls\r\n",
+                            requestedDriver.c_str(), videoInitError.c_str());
         MessageBox(nullptr, L"Windows aplication error!", L"Aplication Error", MB_ICONERROR);
         return 0;
     }
@@ -2154,7 +2229,8 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
     timers.SetRepeating(MUHELPER_TIMER, 250 /* ms */,
                         [] { MUHelper::CMuHelper::TimerProc(nullptr, 0, MUHELPER_TIMER, 0); });
 
-    srand((unsigned)time(nullptr));
+    // A scene fixture pins the seed so object lighting loads identically in every run; see SceneFixture.cpp.
+    srand(SceneFixture::GetRandomSeed().value_or(static_cast<unsigned>(time(nullptr))));
 
     for (int& i : RandomTable)
         i = rand() % 360;
@@ -2225,6 +2301,9 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int nC
         SystemParametersInfo(SPI_SETSCREENSAVETIMEOUT, 300 * 60, nullptr, 0);
     }
 #endif // _WIN32
+
+    // Opened only when the launcher set the path; silent otherwise.
+    App::Control::ControlServer::Instance().Start(Core::Text::ToUtf8(lpszExeVersion));
 
     std::thread cpuUsageRecorder(RecordCpuUsage);
     const MSG msg = MainLoop();

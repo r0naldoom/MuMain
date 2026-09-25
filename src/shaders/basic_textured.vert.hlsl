@@ -13,6 +13,9 @@ struct VSOutput
     float2 uv : TEXCOORD0;
     float4 color : TEXCOORD1;
     float fogFactor : TEXCOORD2;
+    float3 lightingNormal : TEXCOORD3;
+    nointerpolation uint lightingMode : TEXCOORD4;
+    nointerpolation float3 lightDirection : TEXCOORD5;
     float clipDist : SV_ClipDistance0;
 };
 VSOutput main(VSInput input)
@@ -21,6 +24,9 @@ VSOutput main(VSInput input)
     o.pos = mul(mvp, float4(input.pos, 1.0));
     o.uv = input.uv;
     o.color = input.color;
+    o.lightingNormal = float3(0.0, 0.0, 0.0);
+    o.lightingMode = 0u;
+    o.lightDirection = float3(0.0, 0.0, 0.0);
 
     // Near-plane user clip: fragments with clipDist < 0 are discarded by the GPU.
     // For perspective, clip-space w = -eye_z. Positive w = in front of camera.

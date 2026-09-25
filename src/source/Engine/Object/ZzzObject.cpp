@@ -4,6 +4,10 @@
 #include "Camera/CameraMove.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Render/Models/ZzzBMD.h"
+#include "Render/Renderer/RenderUtils.h"   // mu::PackABGR
+#ifdef _EDITOR
+#include "UI/MapEditor/ObjectThumbnail.h"
+#endif
 #include "Engine/Object/ZzzInfomation.h"
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
@@ -404,6 +408,32 @@ bool Calc_ObjectAnimation(OBJECT* o, bool Translate, int Select)
     return true;
 }
 
+// Lost Tower blocks carry a fire layer: BITMAP_CHROME tinted orange, with the
+// texture streaming on one mesh. The look players know shows that fire only
+// through the alpha holes of the strip texture. Drawing the layer as an opaque
+// pass after the stone gives exactly that: the depth test rejects it on the
+// faces the stone already covered and keeps it where the strip was discarded.
+// Drawing it additively on top instead paints the whole block orange (#589).
+static const vec3_t kLostTowerFireTint = {1.f, 0.2f, 0.1f};
+
+static void RenderLostTowerFireBlock(BMD* b, OBJECT* o, int streamMesh)
+{
+    vec3_t bodyLight;
+    VectorCopy(b->BodyLight, bodyLight);
+
+    b->StreamMesh = -1;
+    b->RenderBody(RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU,
+                  o->BlendMeshTexCoordV, o->HiddenMesh);
+
+    VectorCopy(kLostTowerFireTint, b->BodyLight);
+    b->StreamMesh = streamMesh;
+    b->RenderBody(RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU,
+                  o->BlendMeshTexCoordV, o->HiddenMesh, BITMAP_CHROME);
+
+    VectorCopy(bodyLight, b->BodyLight);
+    b->StreamMesh = -1;
+}
+
 void Draw_RenderObject(OBJECT* o, bool Translate, int Select, int ExtraMon)
 {
     BMD* b = &Models[o->Type];
@@ -524,8 +554,9 @@ void Draw_RenderObject(OBJECT* o, bool Translate, int Select, int ExtraMon)
             //			b->RenderBody(RENDER_TEXTURE,o->Alpha,o->BlendMesh,o->BlendMeshLight,o->BlendMeshTexCoordU,o->BlendMeshTexCoordV);
             if (!M39Kanturu3rd::IsInKanturu3rd())
             {
-                VectorCopy(o->Light, b->BodyLight)
-                    b->RenderMesh(0, RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV);
+                VectorCopy(o->Light, b->BodyLight);
+                b->RenderMesh(0, RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU,
+                              o->BlendMeshTexCoordV);
                 b->RenderMesh(1, RENDER_TEXTURE | RENDER_BRIGHT, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV);
                 b->RenderMesh(2, RENDER_TEXTURE | RENDER_BRIGHT, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV);
                 Vector(1.f, 1.f, 1.f, b->BodyLight);
@@ -998,36 +1029,17 @@ void Draw_RenderObject(OBJECT* o, bool Translate, int Select, int ExtraMon)
             }
             else if (gMapManager.WorldActive == WD_4LOSTTOWER && (o->Type == 23 || o->Type == 19 || o->Type == 20 || o->Type == 3 || o->Type == 4))
             {
-                vec3_t Light, p;
-                float Luminosity;
-                Luminosity = (float)(rand() % 2 + 6) * 0.1f;
-                Vector(Luminosity * 0.4f, Luminosity * 0.8f, Luminosity * 1.f, Light);
-                Vector(0.f, 0.f, 0.f, p);
                 if (o->Type == 23)
                 {
                     b->RenderBody(RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh);
                 }
                 else if (o->Type == 19 || o->Type == 20)
                 {
-                    VectorCopy(b->BodyLight, Light);
-                    b->StreamMesh = -1;
-                    b->RenderBody(RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh);
-                    Vector(1.f, 0.2f, 0.1f, b->BodyLight);
-                    b->StreamMesh = 2;
-                    b->RenderBody(RENDER_TEXTURE | RENDER_BRIGHT, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh, BITMAP_CHROME);
-                    VectorCopy(Light, b->BodyLight);
-                    b->StreamMesh = -1;
+                    RenderLostTowerFireBlock(b, o, 2);
                 }
                 else if (o->Type == 3 || o->Type == 4)
                 {
-                    VectorCopy(b->BodyLight, Light);
-                    b->StreamMesh = -1;
-                    b->RenderBody(RENDER_TEXTURE, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh);
-                    Vector(1.f, 0.2f, 0.1f, b->BodyLight);
-                    b->StreamMesh = 1;
-                    b->RenderBody(RENDER_TEXTURE | RENDER_BRIGHT, o->Alpha, o->BlendMesh, o->BlendMeshLight, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh, BITMAP_CHROME);
-                    VectorCopy(Light, b->BodyLight);
-                    b->StreamMesh = -1;
+                    RenderLostTowerFireBlock(b, o, 1);
                 }
             }
             else if (gMapManager.WorldActive == WD_8TARKAN && (o->Type == 81))
@@ -3246,12 +3258,40 @@ void RenderObjectVisual(OBJECT* o)
     }
 }
 
+#ifdef _EDITOR
+// Set by the Map Editor's Objects tab (Select & edit mode): the object currently
+// selected in the inspector panel, so it can be outlined in the 3D view. Reuses
+// the existing debug bounding-box wireframe (RenderBoundingBox) instead of a
+// second box-drawing implementation.
+OBJECT* g_MapEditorSelectedObject = nullptr;
+
+// Set every frame while Select & edit mode is enabled: the object currently under
+// the cursor (before any click), so it can be outlined too - lets you see what a
+// click would pick, distinct from what's already selected.
+OBJECT* g_MapEditorHoveredObject = nullptr;
+
+// Set every frame while Place new mode is enabled and the cursor is over
+// terrain: the model that would be placed on a click, at the exact position
+// Editor::ObjectPlace::Place() would use (see ComputePlacementPosition()), so
+// RenderPlacementPreview() can draw it translucent before any click happens.
+bool g_MapEditorPlacementPreviewActive = false;
+int g_MapEditorPlacementPreviewType = -1;
+vec3_t g_MapEditorPlacementPreviewPos = {0.0f, 0.0f, 0.0f};
+float g_MapEditorPlacementPreviewYaw = 0.0f;
+float g_MapEditorPlacementPreviewScale = 1.0f;
+#endif
+
 void RenderObjects()
 {
 #ifdef _EDITOR
     s_bShowItemCullSphere = DevEditor_ShouldShowItemCullSphere();
     s_bShowItemPickBoxes = DevEditor_ShouldShowItemPickBoxes();
     s_fCullRadiusItem = DevEditor_GetCullRadiusItem();
+
+    // Object-thumbnail requests are queued during CMuEditorCore::Update()
+    // (ImGui widget code, which runs before BeginFrame()) and can only be
+    // rendered here, inside BeginFrame()/EndFrame() - see ObjectThumbnail.h.
+    g_ObjectThumbnail.ProcessPendingRequests();
 #endif
 
     float   range = 0.f;
@@ -3425,6 +3465,30 @@ void RenderObjects()
                                 RenderBoundingBox(o);
                             }
 #endif // CSK_DEBUG_RENDER_BOUNDINGBOX
+                            // Selection/hover outline is a Map Editor feature, not a debug-only
+                            // diagnostic - it must not be gated behind CSK_DEBUG_RENDER_BOUNDINGBOX,
+                            // which (see Winmain.h) is only ever defined in Debug builds. It was
+                            // nested inside that gate for a while, which meant it silently compiled
+                            // out of every Release build with no visible sign anything was wrong.
+#ifdef _EDITOR
+                            if (o->Visible == true && o == g_MapEditorSelectedObject)
+                            {
+                                // Bright flat yellow (same color all three tiers, no
+                                // pseudo-3D shading) so the outline is unmistakable
+                                // against any background - the dim debug default above
+                                // is deliberately subtle and easy to miss by comparison.
+                                static const std::uint32_t kSelectedColor = mu::PackABGR(1.0f, 0.9f, 0.1f, 1.0f);
+                                RenderObjectOutline(o, kSelectedColor);
+                            }
+                            else if (o->Visible == true && o == g_MapEditorHoveredObject)
+                            {
+                                // Distinct color from the selected outline so you can
+                                // tell "what a click would pick" apart from "what's
+                                // already selected" at a glance.
+                                static const std::uint32_t kHoverColor = mu::PackABGR(0.2f, 0.9f, 1.0f, 1.0f);
+                                RenderObjectOutline(o, kHoverColor);
+                            }
+#endif // _EDITOR
                         }
 
                         if (o->Next == NULL) break;
@@ -3435,6 +3499,13 @@ void RenderObjects()
             }
         }
     }
+
+#ifdef _EDITOR
+    // Drawn once per frame (not per-object - it isn't tied to a real OBJECT
+    // yet), after every real object so it doesn't get occluded by anything
+    // still to come in this loop.
+    RenderPlacementPreview();
+#endif
 }
 
 void RenderObject_AfterCharacter(OBJECT* o, bool Translate, int Select, int ExtraMon)
@@ -4904,18 +4975,27 @@ int OpenObjects(wchar_t* FileName)
 
     int DataPtr = 0;
 
-    BYTE Version = *((BYTE*)(Data + DataPtr)); DataPtr += 1;
+    BYTE Version = Data[DataPtr];
+    DataPtr += 1;
 
     int iMapNumber = 0;
-    short Count = *((short*)(Data + DataPtr)); DataPtr += 2;
+    short Count = 0;
+    memcpy(&Count, Data + DataPtr, sizeof(Count));
+    DataPtr += sizeof(Count);
     for (int i = 0; i < Count; i++)
     {
         vec3_t Position;
         vec3_t Angle;
-        short Type = *((short*)(Data + DataPtr)); DataPtr += 2;
-        memcpy(Position, Data + DataPtr, sizeof(vec3_t)); DataPtr += sizeof(vec3_t);
-        memcpy(Angle, Data + DataPtr, sizeof(vec3_t)); DataPtr += sizeof(vec3_t);
-        float Scale = *((float*)(Data + DataPtr)); DataPtr += 4;
+        short Type = 0;
+        memcpy(&Type, Data + DataPtr, sizeof(Type));
+        DataPtr += sizeof(Type);
+        memcpy(Position, Data + DataPtr, sizeof(vec3_t));
+        DataPtr += sizeof(vec3_t);
+        memcpy(Angle, Data + DataPtr, sizeof(vec3_t));
+        DataPtr += sizeof(vec3_t);
+        float Scale = 0.f;
+        memcpy(&Scale, Data + DataPtr, sizeof(Scale));
+        DataPtr += sizeof(Scale);
         CreateObject(Type, Position, Angle, Scale);
     }
     delete[] Data;
@@ -4948,17 +5028,26 @@ int OpenObjectsEnc(wchar_t* FileName)
 
     int DataPtr = 0;
     DataPtr += 1;
-    int iMapNumber = (int)*((BYTE*)(Data + DataPtr)); DataPtr += 1;
-    short Count = *((short*)(Data + DataPtr)); DataPtr += 2;
+    int iMapNumber = static_cast<int>(Data[DataPtr]);
+    DataPtr += 1;
+    short Count = 0;
+    memcpy(&Count, Data + DataPtr, sizeof(Count));
+    DataPtr += sizeof(Count);
     g_iTotalObj = Count;
     for (int i = 0; i < Count; i++)
     {
         vec3_t Position;
         vec3_t Angle;
-        short Type = *((short*)(Data + DataPtr)); DataPtr += 2;
-        memcpy(Position, Data + DataPtr, sizeof(vec3_t)); DataPtr += sizeof(vec3_t);
-        memcpy(Angle, Data + DataPtr, sizeof(vec3_t)); DataPtr += sizeof(vec3_t);
-        float Scale = *((float*)(Data + DataPtr)); DataPtr += 4;
+        short Type = 0;
+        memcpy(&Type, Data + DataPtr, sizeof(Type));
+        DataPtr += sizeof(Type);
+        memcpy(Position, Data + DataPtr, sizeof(vec3_t));
+        DataPtr += sizeof(vec3_t);
+        memcpy(Angle, Data + DataPtr, sizeof(vec3_t));
+        DataPtr += sizeof(vec3_t);
+        float Scale = 0.f;
+        memcpy(&Scale, Data + DataPtr, sizeof(Scale));
+        DataPtr += sizeof(Scale);
         CreateObject(Type, Position, Angle, Scale);
     }
     delete[] Data;
@@ -6451,7 +6540,9 @@ void RenderItems()
                     o->Position[2] = GetWaterTerrain(o->Position[0], o->Position[1]) + 180;
                 }
 
+                mu::GetRenderer().BeginDrawDiagnosticScope(mu::RenderDebugLabel::GroundItem, o->Position);
                 RenderPartObject(o, o->Type, NULL, Light, o->Alpha, Items[i].Item.Level, Items[i].Item.ExcellentFlags, Items[i].Item.AncientDiscriminator, true, true, true);
+                mu::GetRenderer().EndDrawDiagnosticScope();
                 VectorCopy(vBackup, o->Position);
 
 #ifdef _EDITOR
@@ -10797,7 +10888,7 @@ bool isPartyMemberBuff(int partyindex)
 }
 
 #ifdef CSK_DEBUG_RENDER_BOUNDINGBOX
-void RenderBoundingBox(OBJECT* pObj)
+void RenderBoundingBox(OBJECT* pObj, std::uint32_t darkColor, std::uint32_t midColor, std::uint32_t lightColor)
 {
     EnableAlphaBlend();
     mu::GetRenderer().PushMatrix();
@@ -10829,9 +10920,6 @@ void RenderBoundingBox(OBJECT* pObj)
         return {position[0], position[1], position[2], 0.f, 0.f, 1.f, 0.f, 0.f, color};
     };
 
-    constexpr std::uint32_t darkColor = 0xFF333333u;
-    constexpr std::uint32_t midColor = 0xFF999999u;
-    constexpr std::uint32_t lightColor = 0xFF666666u;
     const mu::Vertex3D lineVertices[] = {
         MakeVertex(TransformVertices[7], darkColor), MakeVertex(TransformVertices[6], darkColor),
         MakeVertex(TransformVertices[4], darkColor), MakeVertex(TransformVertices[5], darkColor),
@@ -10851,3 +10939,130 @@ void RenderBoundingBox(OBJECT* pObj)
     mu::GetRenderer().PopMatrix();
 }
 #endif // CSK_DEBUG_RENDER_BOUNDINGBOX
+
+#ifdef _EDITOR
+// "Inflated hull" outline: draws pObj's own mesh pushed outward along each
+// vertex's normal, with each polygon's vertex order reversed. The renderer's
+// world-geometry pipeline always culls back faces (front_face is fixed CCW;
+// there is no cull-front-only mode - see SetCullFace()/SetFrontFace() in
+// MuRenderer.h), so reversing the winding here is what makes ONLY the
+// "inside" of this larger shell survive culling. Drawn after the object's
+// own normal render (same as this function's caller), depth testing then
+// hides that inner surface wherever the real, unexpanded mesh is nearer to
+// the camera - leaving only the sliver that pokes out past the real
+// silhouette, i.e. a thin outline shaped like the actual model instead of a
+// bounding-box cube.
+void RenderObjectOutline(OBJECT* pObj, std::uint32_t color)
+{
+    if (pObj == nullptr || pObj->Type < 0)
+        return;
+    BMD* b = &Models[pObj->Type];
+    if (b->NumMeshs <= 0 || b->Meshs == nullptr)
+        return;
+
+    // VertexTransform/NormalTransform are shared, mesh-slot-keyed scratch
+    // buffers - any other object using the same model type could have
+    // overwritten them since pObj's own render call earlier this frame, so
+    // recompute pObj's current pose fresh right before reading them.
+    b->BodyScale = pObj->Scale;
+    b->CurrentAction = pObj->CurrentAction;
+    VectorCopy(pObj->Position, b->BodyOrigin);
+    vec3_t bbMin, bbMax;
+    OBB_t obb;
+    b->Animation(BoneTransform, pObj->AnimationFrame, pObj->PriorAnimationFrame, pObj->PriorAction, pObj->Angle,
+                pObj->HeadAngle, false, false);
+    b->Transform(BoneTransform, bbMin, bbMax, &obb, true);
+    // Transform() only eagerly fills VertexTransform/NormalTransform for every
+    // mesh when EditFlag == EDIT_OBJECT; otherwise it stashes the skin request
+    // and defers to these (idempotent, safe-to-call-unconditionally per their
+    // own doc comments) - call them directly so the outline has real data
+    // regardless of the current edit-flag state.
+    b->EnsureCpuVertices();
+    b->EnsureCpuNormals();
+
+    constexpr float kOutlineThickness = 3.0f; // world units
+
+    static std::vector<mu::Vertex3D> s_scratch;
+    s_scratch.clear();
+
+    for (int m = 0; m < b->NumMeshs; ++m)
+    {
+        const Mesh_t& mesh = b->Meshs[m];
+        for (int t = 0; t < mesh.NumTriangles; ++t)
+        {
+            const Triangle_t& tri = mesh.Triangles[t];
+            // Reversed iteration order (Polygon-1 down to 0) flips winding
+            // relative to the normal draw, which iterates 0 up to Polygon-1.
+            for (int k = tri.Polygon - 1; k >= 0; --k)
+            {
+                const int vi = tri.VertexIndex[k];
+                const int ni = tri.NormalIndex[k];
+                if (vi < 0 || vi >= mesh.NumVertices || ni < 0 || ni >= mesh.NumNormals)
+                    continue;
+                const float* pos = VertexTransform[m][vi];
+                const float* nrm = NormalTransform[m][ni];
+                s_scratch.push_back(mu::Vertex3D{pos[0] + nrm[0] * kOutlineThickness,
+                                                 pos[1] + nrm[1] * kOutlineThickness,
+                                                 pos[2] + nrm[2] * kOutlineThickness, 0.f, 0.f, 0.f, 0.f, 0.f, color});
+            }
+        }
+    }
+
+    if (s_scratch.empty())
+        return;
+
+    mu::GetRenderer().SetCullFace(true);
+    mu::GetRenderer().SetDepthTest(true);
+    mu::GetRenderer().DisableBlend();
+    mu::GetRenderer().RenderTriangles(s_scratch, 0u);
+}
+
+extern bool g_MapEditorPlacementPreviewActive;
+extern int g_MapEditorPlacementPreviewType;
+extern vec3_t g_MapEditorPlacementPreviewPos;
+extern float g_MapEditorPlacementPreviewYaw;
+extern float g_MapEditorPlacementPreviewScale;
+
+// Draws the currently-selected palette model, translucent, at the position a
+// click would place it - see the globals' doc comments in this file for how
+// CMapEditorUI::PlaceObjects() keeps them in sync every frame.
+void RenderPlacementPreview()
+{
+    if (!g_MapEditorPlacementPreviewActive || g_MapEditorPlacementPreviewType < 0)
+        return;
+    BMD* b = &Models[g_MapEditorPlacementPreviewType];
+    if (b->NumMeshs <= 0 || b->Meshs == nullptr)
+        return;
+
+    // Unlit, full-bright, same as the palette thumbnails - there's no real
+    // OBJECT yet to derive proper scene lighting from, and a flat readout of
+    // the model's own texture is enough to preview shape/placement.
+    b->BodyScale = g_MapEditorPlacementPreviewScale;
+    VectorCopy(g_MapEditorPlacementPreviewPos, b->BodyOrigin);
+    b->BodyHeight = 0.0f;
+    b->CurrentAction = 0;
+    b->LightEnable = false;
+    b->ContrastEnable = false;
+    b->BodyLight[0] = b->BodyLight[1] = b->BodyLight[2] = 1.0f;
+
+    BoneScale = 1.0f;
+    vec3_t angle = {0.0f, 0.0f, g_MapEditorPlacementPreviewYaw};
+    vec3_t head  = {0.0f, 0.0f, 0.0f};
+    b->Animation(BoneTransform, 0.0f, 0.0f, 0, angle, head, false, false);
+    // Animation() alone isn't enough: RenderBody()'s mesh skinning reads
+    // VertexTransform/NormalTransform, which are only materialized from
+    // Transform()'s stashed bone-matrix/translate/scale state (see
+    // RenderObjectOutline() above, which needs the same two-step sequence).
+    // Without this the preview renders with whatever transform state the
+    // last object drawn this frame left behind - garbled/stretched geometry.
+    vec3_t bbMin, bbMax;
+    OBB_t obb;
+    b->Transform(BoneTransform, bbMin, bbMax, &obb, true);
+    b->EnsureCpuVertices();
+    b->EnsureCpuNormals();
+
+    EnableAlphaBlend();
+    constexpr float kPreviewAlpha = 0.55f;
+    b->RenderBody(RENDER_TEXTURE, kPreviewAlpha, -1, 1.0f, 0.0f, 0.0f);
+}
+#endif // _EDITOR

@@ -11,6 +11,7 @@
 //   - No #ifdef _WIN32 in game logic — cross-platform via stubs.
 #pragma once
 
+#include "DrawDiagnostics.h"
 #include "FramePixelReadback.h"
 
 #include <cstdint>
@@ -24,6 +25,11 @@
 struct SDL_GPUDevice;
 struct TTF_TextEngine;
 struct TTF_Font;
+
+namespace Render
+{
+struct DrawFilter;
+}
 
 namespace mu
 {
@@ -128,6 +134,7 @@ struct SkinningParameters
 
 struct RendererStats
 {
+    std::uint32_t frame = 0;
     std::uint32_t requestedDrawCalls = 0;
     std::uint32_t submittedDrawCalls = 0;
     std::uint32_t mergedDrawCalls = 0;
@@ -141,6 +148,22 @@ struct RendererStats
     std::uint32_t samplerBinds = 0;
     std::uint32_t vertexUniformPushes = 0;
     std::uint32_t fragmentUniformPushes = 0;
+    std::uint32_t renderCommandsReplayed = 0;
+    std::uint32_t fallbackTextureDraws = 0;
+    std::uint32_t whiteTextureDraws = 0;
+    std::uint32_t realTextureDraws = 0;
+    std::uint32_t geometryCommands = 0;
+    std::uint32_t droppedDraws = 0;
+    std::uint32_t filteredDraws = 0;
+    std::uint32_t batchBreakBlend = 0;
+    std::uint32_t batchBreakDepth = 0;
+    std::uint32_t batchBreakMatrix = 0;
+    std::uint32_t batchBreakTexture = 0;
+    std::uint32_t batchBreakProgram = 0;
+    std::uint32_t batchBreakUniform = 0;
+    std::uint32_t batchBreakDraw = 0;
+    std::uint32_t batchBreakOther = 0;
+    std::uint32_t frameProfilerTextureUploads = 0;
     double frameMilliseconds = 0.0;
     double replayMilliseconds = 0.0;
     double submitMilliseconds = 0.0;
@@ -175,8 +198,21 @@ public:
         return false;
     }
 
+    // Chooses fragment lighting for newly submitted GPU-skinned textured meshes.
+    // Disabled preserves the established vertex-lighting path.
+    virtual void SetSkinnedPerPixelLightingEnabled(bool /*enabled*/) {}
+
     // Render a quad strip from world-space vertices (requires >= 4 vertices, even count ideal).
     virtual void RenderQuadStrip(std::span<const Vertex3D> vertices, std::uint32_t textureId) = 0;
+
+    // Inserts a capture-only label into the renderer command stream.
+    virtual void InsertDebugLabel(RenderDebugLabel /*label*/) {}
+
+    // Applies a semantic label to geometry recorded until the next call.
+    virtual void SetDrawDebugLabel(RenderDebugLabel /*label*/) {}
+    virtual void BeginDrawDiagnosticScope(RenderDebugLabel /*label*/, const float* /*sourceOrigin*/) {}
+    [[nodiscard]] virtual bool IsDrawDiagnosticScopeEnabled(RenderDebugLabel /*label*/) const { return false; }
+    virtual void EndDrawDiagnosticScope() {}
 
     // Set the active alpha-blending equation.
     virtual void SetBlendMode(BlendMode mode) = 0;
@@ -194,6 +230,10 @@ public:
     virtual void SetCullFace(bool /*enabled*/) {}
     virtual void SetAlphaTest(bool /*enabled*/) {}
     virtual void SetTexture2D(bool /*enabled*/) {}
+
+    // Suppresses recorded SDL GPU geometry selected by an immutable diagnostic predicate.
+    virtual void SetDrawFilter(const Render::DrawFilter& /*filter*/) {}
+    [[nodiscard]] virtual DrawDiagnosticSnapshot GetDrawDiagnosticSnapshot() const { return {}; }
     virtual void SetFogEnabled(bool /*enabled*/) {}
 
     // Bind texture by game bitmap index. SDL_gpu resolves this to SDL_GPUTexture*
@@ -340,8 +380,7 @@ public:
         (void)width;
         (void)height;
     }
-    [[nodiscard]] virtual std::uint32_t CreateTexture(
-        std::uint32_t width, std::uint32_t height, const void* pixels)
+    [[nodiscard]] virtual std::uint32_t CreateTexture(std::uint32_t width, std::uint32_t height, const void* pixels)
     {
         (void)width;
         (void)height;
@@ -363,11 +402,51 @@ public:
         return false;
     }
 
+#ifdef _EDITOR
     // -----------------------------------------------------------------------
-    // Story 7-9-6: GL state migration — replaces raw OpenGL calls.
-    // Default implementations are no-ops; SDL_gpu backend overrides them.
+    // Editor-only: isolated offscreen render captures for UI preview thumbnails
+    // (e.g. the Map Editor's object-model preview grid). Draw calls issued
+    // between BeginOffscreenCapture()/EndOffscreenCapture() render into a
+    // dedicated texture instead of the main frame and never appear on screen.
+    // Not available in non-editor builds - exists solely for editor preview UI,
+    // never on the normal gameplay rendering path.
     // -----------------------------------------------------------------------
 
+    // `textureId` may be an existing id (reused/resized as needed) or 0 to
+    // allocate a new one. Returns the texture id, or 0 on failure. Calls don't
+    // nest - only one capture may be open at a time.
+    [[nodiscard]] virtual std::uint32_t BeginOffscreenCapture(std::uint32_t /*textureId*/, std::uint32_t /*width*/,
+                                                              std::uint32_t /*height*/)
+    {
+        return 0u;
+    }
+    // Closes the capture opened by BeginOffscreenCapture.
+    virtual void EndOffscreenCapture() {}
+
+    // Real GPU texture pointer for a texture id (from CreateTexture or
+    // BeginOffscreenCapture), for handing to ImGui as ImTextureID. Returns
+    // nullptr if the id isn't registered.
+    [[nodiscard]] virtual void* GetTexturePointer(std::uint32_t /*textureId*/) const
+    {
+        return nullptr;
+    }
+
+    // True if one or more completed BeginOffscreenCapture()/EndOffscreenCapture()
+    // draw-command ranges are still waiting to be replayed into their capture
+    // texture (replay happens once per EndFrame(), after this frame's ImGui/game
+    // code has already returned). A caller that's about to release/reload a
+    // resource a just-recorded capture might still be sampling (e.g. reusing a
+    // scratch model slot for a different file) must wait for this to go false
+    // first, or the eventual replay reads a freed texture/sampler.
+    [[nodiscard]] virtual bool HasPendingOffscreenCaptures() const
+    {
+        return false;
+    }
+#endif // _EDITOR
+    [[nodiscard]] virtual DrawDiagnosticSnapshot GetDrawDiagnosticSnapshot(std::uint32_t frame = 0) const
+    {
+        return {};
+    }
     // AC-3: Clear color — replaces glClearColor.
     // SDL_gpu backend stores RGBA and applies in BeginFrame render pass.
     virtual void SetClearColor(float /*r*/, float /*g*/, float /*b*/, float /*a*/) {}

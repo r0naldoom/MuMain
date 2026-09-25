@@ -19,6 +19,26 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+option(MU_LINK_SDL_PLATFORM_BACKENDS
+  "Linux: make SDL link its video backend libraries and the Vulkan loader at build time instead of loading them at run time" OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # By default SDL dlopen()s libX11, libwayland-client, libdecor and libdrm/libgbm at run time,
+  # which needs them on a global library path. A packaged runtime may not have one; with the
+  # option ON they become DT_NEEDED entries with a recorded RUNPATH instead. Both branches FORCE
+  # the cache so toggling the option in an existing build directory is symmetric.
+  if(MU_LINK_SDL_PLATFORM_BACKENDS)
+    set(SDL_X11_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_WAYLAND_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_WAYLAND_LIBDECOR_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_KMSDRM_SHARED OFF CACHE BOOL "" FORCE)
+  else()
+    set(SDL_X11_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_WAYLAND_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_WAYLAND_LIBDECOR_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_KMSDRM_SHARED ON CACHE BOOL "" FORCE)
+  endif()
+endif()
+
 add_subdirectory(ThirdParty/SDL EXCLUDE_FROM_ALL)
 set(_saved_BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF)
@@ -57,6 +77,12 @@ endif()
 
 # Editor mode option (for admin builds)
 option(ENABLE_EDITOR "Enable editor features for admin builds" OFF)
+
+# Developer control socket: a local socket through which test scripts drive
+# the client (login, move, attack, state, events). Never for player builds:
+# when OFF, none of its sources are compiled and the activation variable does
+# not exist in the binary (enforced by the control_socket_leak test).
+option(ENABLE_CONTROL_SOCKET "Developer control socket for scripted clients (never for player builds)" OFF)
 
 # ---------------------------------------------------------------------------
 # Engine/game code -> static library (libMuClient); MuMain -> thin executable.
@@ -105,6 +131,18 @@ list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]Render[/\\]Renderer[/\\]MuRend
 # compiled as a second backend.
 list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]Render[/\\](Core|RHI|Shaders)[/\\]")
 
+# The control socket and its local-socket transport exist only in developer
+# builds. The two headers that the rest of the client includes
+# (App/Control/ControlTaps.h, ControlServer.h) compile to no-ops without
+# MU_ENABLE_CONTROL_SOCKET, so the call sites need no conditionals.
+if(NOT ENABLE_CONTROL_SOCKET)
+  list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]App[/\\]Control[/\\]")
+  list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]Core[/\\]Platform[/\\]LocalSocket\\.cpp$")
+  # The injector is the control socket's hands; its header compiles the two
+  # calls the rest of the client makes to nothing.
+  list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]Core[/\\]Input[/\\]SyntheticInput\\.cpp$")
+endif()
+
 # Add MuEditor sources when editor is enabled
 if(ENABLE_EDITOR)
   file(GLOB_RECURSE MU_EDITOR_SOURCES
@@ -150,10 +188,20 @@ add_library(MuClient STATIC ${MU_CLIENT_SOURCES})
 target_compile_features(MuClient PUBLIC cxx_std_20)
 if(MSVC)
   target_compile_options(MuClient PRIVATE /utf-8 /we4828)
+  # Release normally ships with no debug info at all, so a WER/minidump crash
+  # from a Release build can't be symbolized. /Z7 embeds debug info directly
+  # in each .obj (unlike /Zi, it needs no shared .pdb write-lock, so it's safe
+  # under Ninja's parallel compilation) without touching optimization.
+  target_compile_options(MuClient PRIVATE $<$<CONFIG:Release>:/Z7>)
 endif()
 target_compile_definitions(MuClient PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
 target_link_libraries(MuClient PUBLIC SDL3::SDL3 glm::glm spdlog::spdlog)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND MU_LINK_SDL_PLATFORM_BACKENDS)
+  # SDL also dlopen()s libvulkan.so.1; the same option makes it a DT_NEEDED entry of Main
+  # (linked below) so the loader resolves through the RUNPATH.
+  find_package(Vulkan REQUIRED)
+endif()
 target_link_libraries(MuClient PUBLIC OpenSSL::Crypto)
 if(TARGET SDL3_ttf::SDL3_ttf)
   target_link_libraries(MuClient PUBLIC SDL3_ttf::SDL3_ttf)
@@ -237,6 +285,20 @@ else()
 endif()
 target_compile_features(Main PUBLIC cxx_std_20)
 target_link_libraries(Main PRIVATE MuClient::MuClient)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND MU_LINK_SDL_PLATFORM_BACKENDS)
+  target_link_libraries(Main PRIVATE Vulkan::Vulkan)
+endif()
+
+if (MSVC)
+  # Pairs with MuClient's /Z7 above: link the embedded debug info into
+  # Main.pdb so a Release crash dump can be symbolized (see there for why).
+  # /MAP also emits a plain-text RVA-to-function listing, much faster to grep
+  # for a WER crash offset than pulling symbols out of the PDB.
+  target_link_options(Main PRIVATE
+    $<$<CONFIG:Release>:/DEBUG>
+    $<$<CONFIG:Release>:/MAP:$<TARGET_FILE_DIR:Main>/Main.map>
+  )
+endif()
 
 if (NOT MSVC)
   set(MU_MAIN_MAP_FILE "${CMAKE_CURRENT_BINARY_DIR}/Main.map")
@@ -469,8 +531,16 @@ target_include_directories(MuClient PUBLIC
   "${CMAKE_BINARY_DIR}/generated"
   # stb_truetype backs the portable GDI text rasterizer (issue #462).
   "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
+  # nlohmann/json backs the control socket's request/response encoding. Only
+  # the App/Control sources include it, so a player build does not see it.
+  $<$<BOOL:${ENABLE_CONTROL_SOCKET}>:${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty>
   $<$<BOOL:${ENABLE_EDITOR}>:${CMAKE_CURRENT_SOURCE_DIR}/MuEditor>
 )
+target_include_directories(MuClient PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/renderdoc")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(MuClient PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 set_source_files_properties(
   "${CMAKE_CURRENT_SOURCE_DIR}/source/Core/Platform/Audio/MiniAudioImpl.cpp"
@@ -490,6 +560,7 @@ target_compile_definitions(MuClient PUBLIC
   $<$<CONFIG:Debug>:_DEBUG;_FOREIGN_DEBUG>
   $<$<CONFIG:Release>:NDEBUG;_FOREIGN_NDEBUG;LDS_PATCH_GLOBAL_100520>
   $<$<BOOL:${ENABLE_EDITOR}>:_EDITOR>  # Editor features for admin builds
+  $<$<BOOL:${ENABLE_CONTROL_SOCKET}>:MU_ENABLE_CONTROL_SOCKET>  # Developer control socket
 )
 
 if (MSVC)

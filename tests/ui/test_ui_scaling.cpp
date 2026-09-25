@@ -2,6 +2,9 @@
 
 #include <doctest.h>
 
+#include <cmath>
+#include <string_view>
+
 #include "Character/CharSelMainWin.h"
 #include "Core/Input/Input.h"
 #include "Core/Platform/WinCompat.h"
@@ -9,6 +12,7 @@
 #include "Data/GameConfig/GameConfig.h"
 #include "Data/GameConfig/GameConfigConstants.h"
 #include "Engine/Object/ZzzInventory.h"
+#include "Scenes/SceneFixture.h"
 #include "UI/Legacy/UIControls.h"
 #include "UI/Legacy/UIMapName.h"
 #include "UI/NewUI/Dialogs/NewUIChatCommandWindow.h"
@@ -76,6 +80,105 @@ public:
     int renderMouseX = -1;
     int renderMouseY = -1;
 };
+}
+
+TEST_CASE("selected scene fixture fixes its windowed capture target [scene][fixture]")
+{
+    SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1");
+
+    const auto targetWindowSize = SceneFixture::GetTargetWindowSize();
+    CHECK(targetWindowSize.has_value());
+    if (targetWindowSize)
+    {
+        CHECK(targetWindowSize->width == 800);
+        CHECK(targetWindowSize->height == 600);
+    }
+    const auto randomSeed = SceneFixture::GetRandomSeed();
+    CHECK(randomSeed.has_value());
+    if (randomSeed)
+    {
+        CHECK(*randomSeed == 20260924u);
+    }
+    const auto worldBottomReserve = SceneFixture::GetWorldViewportBottomReserve();
+    CHECK(worldBottomReserve.has_value());
+    if (worldBottomReserve)
+    {
+        CHECK(*worldBottomReserve == doctest::Approx(48.0f));
+    }
+    CHECK(UI::Scaling::WorldViewport(800, 600, false).height == 540);
+
+    SceneFixture::ConfigureFromCommandLine(L"");
+    CHECK_FALSE(SceneFixture::GetTargetWindowSize().has_value());
+    CHECK_FALSE(SceneFixture::GetRandomSeed().has_value());
+    CHECK_FALSE(SceneFixture::GetWorldViewportBottomReserve().has_value());
+    CHECK(UI::Scaling::WorldViewport(800, 600, false).height == 536);
+}
+
+TEST_CASE("scene fixture schedules one capture after readiness [scene][fixture]")
+{
+    constexpr unsigned int warmupFrames = 240;
+
+    SceneFixture::ConfigureFromCommandLine(
+        L"--scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture");
+
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+    CHECK_FALSE(SceneFixture::ObserveServerSpawn(4, 91, 183));
+    CHECK(SceneFixture::ObserveServerSpawn(4, 213, 74));
+    for (unsigned int frame = 0; frame < warmupFrames; ++frame)
+    {
+        CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+    }
+    CHECK(SceneFixture::ShouldTriggerCaptureForFrame());
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    SceneFixture::NotifyCaptureTriggered();
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK(SceneFixture::ShouldExitAfterCapturedFrame());
+    CHECK_FALSE(SceneFixture::ShouldExitAfterCapturedFrame());
+
+    SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1 --capture-when-ready");
+    CHECK(SceneFixture::ObserveServerSpawn(4, 213, 74));
+    for (unsigned int frame = 0; frame < warmupFrames; ++frame)
+    {
+        CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+    }
+    CHECK(SceneFixture::ShouldTriggerCaptureForFrame());
+    SceneFixture::NotifyCaptureSkipped();
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    SceneFixture::ConfigureFromCommandLine(L"--scene=lost-tower-wall-v1");
+    CHECK_FALSE(SceneFixture::ShouldTriggerCaptureForFrame());
+
+    // The fixture is process-wide state: leaving it active here changes the world
+    // viewport for every test that runs after this one.
+    SceneFixture::ConfigureFromCommandLine(L"");
+    CHECK_FALSE(SceneFixture::IsActive());
+}
+
+TEST_CASE("wings scene pins the flare pulse to its crest [scene][fixture]")
+{
+    SceneFixture::ConfigureFromCommandLine(L"--scene=hero-wings-v1");
+    CHECK(SceneFixture::IsActive());
+    CHECK(std::wstring_view(SceneFixture::GetId()) == L"hero-wings-v1");
+
+    CHECK_FALSE(SceneFixture::ObserveServerSpawn(3, 139, 108));
+    CHECK(SceneFixture::ObserveServerSpawn(4, 213, 74));
+
+    double worldTime = 1234.0;
+    SceneFixture::ApplyWorldTime(worldTime);
+    // The wing flares scale and colour by absf(sinf(WorldTime * 0.002f)); the pinned
+    // time has to sit on that pulse's crest for a capture pair to be comparable.
+    CHECK(std::fabs(std::sin(worldTime * 0.002)) == doctest::Approx(1.0));
+
+    SceneFixture::ConfigureFromCommandLine(L"--scene=no-such-scene");
+    CHECK_FALSE(SceneFixture::IsActive());
+
+    // The fixture is process-wide state: leaving it active here changes the world
+    // viewport for every test that runs after this one.
+    SceneFixture::ConfigureFromCommandLine(L"");
+    CHECK_FALSE(SceneFixture::IsActive());
 }
 
 TEST_CASE("teleport layout uses stable width and fits above the dock [ui][scaling]")
@@ -625,20 +728,25 @@ TEST_CASE("experience transform spans the window with HUD vertical scale [ui][sc
     CHECK(UI::Scaling::PositionY(experience, 480.0f) == doctest::Approx(1200.0f));
 }
 
-TEST_CASE("world viewport spans the window while docks remain at the rounded HUD top [ui][scaling]")
+TEST_CASE("world viewport ends at the rounded HUD top except in top view [ui][scaling]")
 {
     const auto hd = UI::Scaling::WorldViewport(1280, 720, false);
     CHECK(hd.width == 1280);
-    CHECK(hd.height == 720);
-    CHECK(UI::Scaling::WorldViewportAspect(1280, 720, false) == doctest::Approx(1280.0f / 720.0f));
+    CHECK(hd.height == 644);
+    CHECK(UI::Scaling::WorldViewportAspect(1280, 720, false) == doctest::Approx(1280.0f / 644.0f));
     const auto hdDock = UI::Scaling::DockLeftTransform(1280, 720);
-    CHECK(UI::Scaling::PositionY(hdDock, 432.0f) == doctest::Approx(644.0f));
+    CHECK(UI::Scaling::PositionY(hdDock, 432.0f) == doctest::Approx(static_cast<float>(hd.height)));
+
+    const auto fixture = UI::Scaling::WorldViewport(800, 600, false);
+    CHECK(fixture.width == 800);
+    CHECK(fixture.height == 536);
+    CHECK(UI::Scaling::WorldViewportAspect(800, 600, false) == doctest::Approx(800.0f / 536.0f));
 
     const auto sxga = UI::Scaling::WorldViewport(1280, 1024, false);
     CHECK(sxga.width == 1280);
-    CHECK(sxga.height == 1024);
+    CHECK(sxga.height == 922);
     const auto sxgaDock = UI::Scaling::DockLeftTransform(1280, 1024);
-    CHECK(UI::Scaling::PositionY(sxgaDock, 432.0f) == doctest::Approx(922.0f));
+    CHECK(UI::Scaling::PositionY(sxgaDock, 432.0f) == doctest::Approx(static_cast<float>(sxga.height)));
 
     const auto topView = UI::Scaling::WorldViewport(1920, 1200, true);
     CHECK(topView.width == 1920);

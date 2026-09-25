@@ -21,7 +21,7 @@ set(MU_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(MU_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders")
 set(MU_SHADER_COMPILED_DIR "${MU_SHADER_SOURCE_DIR}/compiled")
 set(MU_SHADER_VALIDATION_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateShaderBlobs.cmake")
-set(MU_SHADER_COMPILATION_STAMP "${CMAKE_BINARY_DIR}/shader-compilation.config")
+set(MU_SHADER_COMPILATION_STAMP "${MU_SHADER_OUTPUT_DIR}/shader-compilation.config")
 add_compile_definitions(MU_SHADER_DIR="${MU_SHADER_OUTPUT_DIR}/")
 file(MAKE_DIRECTORY "${MU_SHADER_OUTPUT_DIR}")
 
@@ -78,10 +78,38 @@ if(MU_ENABLE_SHADER_COMPILATION)
             "Install them or configure with MU_ENABLE_SHADER_COMPILATION=OFF.")
     endif()
 
+    function(mu_record_shader_tool_provenance tool_variable version_argument)
+        file(SHA256 "${${tool_variable}}" tool_sha256)
+        execute_process(
+            COMMAND "${${tool_variable}}" "${version_argument}"
+            RESULT_VARIABLE tool_version_result
+            OUTPUT_VARIABLE tool_version
+            ERROR_VARIABLE tool_version_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_STRIP_TRAILING_WHITESPACE)
+        if(NOT tool_version_result EQUAL 0)
+            message(FATAL_ERROR "Could not read ${tool_variable} version: ${tool_version_error}")
+        endif()
+        if(NOT tool_version)
+            set(tool_version "${tool_version_error}")
+        endif()
+        if(NOT tool_version)
+            message(FATAL_ERROR "Could not read ${tool_variable} version output")
+        endif()
+        string(REPLACE "\r\n" "\n" tool_version "${tool_version}")
+        string(REPLACE "\n" " | " tool_version "${tool_version}")
+        set(${tool_variable}_SHA256 "${tool_sha256}" PARENT_SCOPE)
+        set(${tool_variable}_VERSION "${tool_version}" PARENT_SCOPE)
+    endfunction()
+
+    mu_record_shader_tool_provenance(GLSLANG_EXE "--version")
+    mu_record_shader_tool_provenance(SPIRV_CROSS_EXE "--revision")
+    mu_record_shader_tool_provenance(DXC_EXE "--version")
+
     file(CONFIGURE
         OUTPUT "${MU_SHADER_COMPILATION_STAMP}"
         CONTENT
-            "mode=ON\nGLSLANG_EXE=${GLSLANG_EXE}\nSPIRV_CROSS_EXE=${SPIRV_CROSS_EXE}\nDXC_EXE=${DXC_EXE}\n"
+            "mode=ON\nGLSLANG_EXE=${GLSLANG_EXE}\nGLSLANG_VERSION=${GLSLANG_EXE_VERSION}\nGLSLANG_SHA256=${GLSLANG_EXE_SHA256}\nSPIRV_CROSS_EXE=${SPIRV_CROSS_EXE}\nSPIRV_CROSS_VERSION=${SPIRV_CROSS_EXE_VERSION}\nSPIRV_CROSS_SHA256=${SPIRV_CROSS_EXE_SHA256}\nDXC_EXE=${DXC_EXE}\nDXC_VERSION=${DXC_EXE_VERSION}\nDXC_SHA256=${DXC_EXE_SHA256}\n"
         NEWLINE_STYLE UNIX)
 
     function(mu_add_shader shader_name stage)

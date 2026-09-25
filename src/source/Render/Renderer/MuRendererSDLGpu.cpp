@@ -33,6 +33,8 @@
 
 #include "D3D12Diagnostics.h"
 #include "DrawCommandHistory.h"
+#include "DrawDiagnosticProjection.h"
+#include "DrawFilter.h"
 #include "MuRenderer.h"
 #include "QuadTopology.h"
 #include "SdlGpuPixelFormat.h"
@@ -109,6 +111,10 @@ struct SkinningVertexUniforms
     float textureCoordinateParameters[4]{};
 };
 static_assert(sizeof(SkinningVertexUniforms) == 192, "SkinningVertexUniforms must be 192 bytes");
+
+constexpr std::uint32_t kSkinnedLightingDisabled = 0u;
+constexpr std::uint32_t kSkinnedLightingVertex = 1u;
+constexpr std::uint32_t kSkinnedLightingFragment = 2u;
 
 } // anonymous namespace
 
@@ -249,6 +255,7 @@ static SDL_GPUTexture* s_swapchainTexture = nullptr;
 static Uint32 s_swapW = 0u;
 static Uint32 s_swapH = 0u;
 static std::uint32_t s_pendingFrameCaptureTextureId = 0u;
+static std::uint32_t s_pendingFrameReadbackFrame = 0u;
 static FrameReadbackState s_frameReadbackState;
 static SDL_GPUTexture* s_frameReadbackTexture = nullptr;
 
@@ -425,6 +432,7 @@ static void BlitTextureToSwapchain(SDL_GPUCommandBuffer* commandBuffer, SDL_GPUT
         s_frameReadbackState.Fail();
         return true;
     }
+    pixels.frame = s_pendingFrameReadbackFrame;
 
     s_frameReadbackState.Complete(std::move(pixels));
     return true;
@@ -444,6 +452,14 @@ static Uint32 s_dbgMergedDrawsThisFrame = 0u;
 static Uint32 s_dbgMerged2DDrawsThisFrame = 0u;
 static Uint32 s_dbgWhiteTextureDrawsThisFrame = 0u;
 static Uint32 s_dbgRealTextureDrawsThisFrame = 0u;
+// Replayed commands minus submitted draws is not the number of draws that went
+// missing: the replay loop also walks SetViewport, SetScissor and DebugLabel.
+// Splitting the three closes the arithmetic -- geometry commands equal submitted
+// plus dropped plus filtered -- so a draw that was recorded and then silently
+// not drawn stops hiding inside a per-frame constant.
+static Uint32 s_dbgGeometryCmdsThisFrame = 0u;
+static Uint32 s_dbgDroppedDrawsThisFrame = 0u;
+static Uint32 s_dbgFilteredDrawsThisFrame = 0u;
 static Uint32 s_dbgPipelineBindsThisFrame = 0u;
 static Uint32 s_dbgSamplerBindsThisFrame = 0u;
 static Uint32 s_dbgVertexUniformPushesThisFrame = 0u;
@@ -455,6 +471,7 @@ static bool s_statsEnabled = false;
 static bool s_disableD3D12Culling = false;
 static bool s_disableD3D12TriangleMerging = false;
 static mu::RendererStats s_lastFrameStats;
+
 static std::chrono::steady_clock::time_point s_frameBeginTime;
 static std::chrono::steady_clock::time_point s_renderReplayBeginTime;
 static std::chrono::steady_clock::time_point s_submitTime;
@@ -537,6 +554,7 @@ enum class RenderCmdType : uint8_t
 {
     SetViewport,
     SetScissor, // pixel-level rect clip — Vulkan/Metal/D3D12 viewport alone doesn't clip
+    DebugLabel,
 #ifdef _EDITOR
     EditorOverlay,
 #endif
@@ -550,9 +568,14 @@ enum class RenderCmdType : uint8_t
 struct RenderCmd
 {
     RenderCmdType type;
+    RenderDebugLabel debugLabel{};
+    std::uint32_t diagnosticScope = 0;
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUTexture* texture;
     SDL_GPUSampler* sampler;
+    std::uint32_t textureId;
+    std::uint32_t textureWidth;
+    std::uint32_t textureHeight;
     Uint32 vtxOffset;
     Uint32 vtxCount;       // for DrawTriangles
     Uint32 idxCount;       // for DrawIndexed*
@@ -567,11 +590,217 @@ struct RenderCmd
     bool depthTestEnabled{};
     bool depthMaskEnabled{};
     bool cullFaceEnabled{};
+#ifdef _EDITOR
+    // Set once this command has been replayed into an editor offscreen capture
+    // (see BeginOffscreenCapture/EndOffscreenCapture); the main frame's replay
+    // pass then skips it instead of drawing it a second time into the swapchain.
+    bool consumedByOffscreenCapture = false;
+#endif
 };
 
 static std::vector<RenderCmd> s_renderCmds;
 static constexpr std::size_t kNoDrawCommand = std::numeric_limits<std::size_t>::max();
 static Render::DrawCommandHistory s_previousDrawCommands;
+static Render::DrawFilter s_drawFilter;
+
+static DrawDiagnosticSnapshot s_drawDiagnosticFrame;
+static DrawDiagnosticSnapshot s_lastDrawDiagnosticFrame;
+static std::array<DrawDiagnosticSnapshot, 4u> s_drawDiagnosticHistory;
+static std::uint32_t s_activeDrawDiagnosticScope = 0;
+
+[[nodiscard]] static RenderDebugLabel ActiveDrawDiagnosticLabel()
+{
+    if (!s_drawFilter.enabled || !s_drawFilter.onlyMatches || !s_drawFilter.hasDebugLabel)
+    {
+        return RenderDebugLabel::None;
+    }
+
+    return static_cast<RenderDebugLabel>(s_drawFilter.debugLabel);
+}
+
+[[nodiscard]] static bool IsActiveDrawDiagnosticScopeEnabled(RenderDebugLabel label)
+{
+    return ActiveDrawDiagnosticLabel() == label;
+}
+
+[[nodiscard]] static DrawDiagnosticScope* ActiveDrawDiagnosticScope()
+{
+    if (s_activeDrawDiagnosticScope == 0u || s_activeDrawDiagnosticScope > s_drawDiagnosticFrame.scopes.size())
+    {
+        return nullptr;
+    }
+
+    return &s_drawDiagnosticFrame.scopes[s_activeDrawDiagnosticScope - 1u];
+}
+
+static void StartDrawDiagnosticScope(RenderDebugLabel label, const float* sourceOrigin)
+{
+    if (!IsActiveDrawDiagnosticScopeEnabled(label) || sourceOrigin == nullptr)
+    {
+        return;
+    }
+
+    DrawDiagnosticScope scope;
+    scope.ordinal = static_cast<std::uint32_t>(s_drawDiagnosticFrame.scopes.size() + 1u);
+    scope.label = label;
+    scope.sourceOrigin[0] = sourceOrigin[0];
+    scope.sourceOrigin[1] = sourceOrigin[1];
+    scope.sourceOrigin[2] = sourceOrigin[2];
+    scope.hasSourceOrigin = true;
+    s_drawDiagnosticFrame.scopes.push_back(scope);
+    s_activeDrawDiagnosticScope = scope.ordinal;
+}
+
+static void CloseDrawDiagnosticScope()
+{
+    s_activeDrawDiagnosticScope = 0u;
+}
+
+static void RecordDrawDiagnosticOutcome(std::uint32_t scopeId, bool submitted, bool dropped, bool filtered)
+{
+    if (scopeId == 0u || scopeId > s_drawDiagnosticFrame.scopes.size())
+    {
+        return;
+    }
+
+    DrawDiagnosticScope& scope = s_drawDiagnosticFrame.scopes[scopeId - 1u];
+    if (submitted)
+    {
+        ++scope.submittedCommands;
+    }
+    if (dropped)
+    {
+        ++scope.droppedCommands;
+    }
+    if (filtered)
+    {
+        ++scope.filteredCommands;
+    }
+}
+
+[[nodiscard]] static std::array<float, 4> ProjectSkinnedVertex(const SkinnedVertex3D& vertex,
+                                                                 const SkinningParameters& parameters,
+                                                                 const glm::mat4& mvp)
+{
+    glm::vec3 transformed{vertex.x, vertex.y, vertex.z};
+    const std::int32_t boneIndex = vertex.positionBoneIndex;
+    const std::size_t boneCount = parameters.boneMatrices.size() / 12u;
+    if (boneIndex >= 0 && static_cast<std::size_t>(boneIndex) < boneCount)
+    {
+        const std::size_t row = static_cast<std::size_t>(boneIndex) * 12u;
+        const auto& bones = parameters.boneMatrices;
+        if (parameters.boneScale == 1.0f)
+        {
+            const float restScale = parameters.restPoseScale != 0.0f ? parameters.restPoseScale : 1.0f;
+            const glm::vec4 restPosition{transformed * restScale, 1.0f};
+            transformed = {
+                glm::dot(glm::vec4{bones[row], bones[row + 1u], bones[row + 2u], bones[row + 3u]}, restPosition),
+                glm::dot(glm::vec4{bones[row + 4u], bones[row + 5u], bones[row + 6u], bones[row + 7u]}, restPosition),
+                glm::dot(glm::vec4{bones[row + 8u], bones[row + 9u], bones[row + 10u], bones[row + 11u]}, restPosition),
+            };
+        }
+        else
+        {
+            transformed = {
+                glm::dot(glm::vec3{bones[row], bones[row + 1u], bones[row + 2u]}, transformed),
+                glm::dot(glm::vec3{bones[row + 4u], bones[row + 5u], bones[row + 6u]}, transformed),
+                glm::dot(glm::vec3{bones[row + 8u], bones[row + 9u], bones[row + 10u]}, transformed),
+            };
+            transformed *= parameters.boneScale;
+            transformed += glm::vec3{bones[row + 3u], bones[row + 7u], bones[row + 11u]};
+        }
+    }
+    if (parameters.translate)
+    {
+        transformed = glm::vec3{parameters.bodyOrigin[0], parameters.bodyOrigin[1], parameters.bodyOrigin[2]} +
+                      transformed * parameters.bodyScale;
+    }
+
+    const glm::vec4 clip = mvp * glm::vec4{transformed, 1.0f};
+    return {clip.x, clip.y, clip.z, clip.w};
+}
+
+static void RecordSkinnedDiagnosticGeometry(std::span<const SkinnedVertex3D> vertices,
+                                            const SkinningParameters& parameters,
+                                            const glm::mat4& mvp)
+{
+    DrawDiagnosticScope* scope = ActiveDrawDiagnosticScope();
+    if (scope == nullptr)
+    {
+        return;
+    }
+
+    ++scope->geometryCommands;
+    if (parameters.translate)
+    {
+        scope->effectiveSkinningOrigin[0] = parameters.bodyOrigin[0];
+        scope->effectiveSkinningOrigin[1] = parameters.bodyOrigin[1];
+        scope->effectiveSkinningOrigin[2] = parameters.bodyOrigin[2];
+        scope->effectiveSkinningScale = parameters.bodyScale;
+        scope->hasEffectiveSkinningOrigin = true;
+    }
+
+    for (std::size_t index = 0; index < vertices.size(); index += 3u)
+    {
+        Render::Diagnostic::AddProjectedTriangle(*scope,
+                                                 ProjectSkinnedVertex(vertices[index], parameters, mvp),
+                                                 ProjectSkinnedVertex(vertices[index + 1u], parameters, mvp),
+                                                 ProjectSkinnedVertex(vertices[index + 2u], parameters, mvp),
+                                                 s_drawDiagnosticFrame.viewportWidth,
+                                                 s_drawDiagnosticFrame.viewportHeight);
+    }
+}
+void CaptureLastFrameStats()
+{
+    s_lastFrameStats.frame = s_dbgFrameCount;
+    s_lastFrameStats.requestedDrawCalls = s_dbgDrawCallsThisFrame;
+    s_lastFrameStats.submittedDrawCalls = s_dbgGpuDrawCallsThisFrame;
+    s_lastFrameStats.mergedDrawCalls = s_dbgMergedDrawsThisFrame;
+    s_lastFrameStats.merged2DDrawCalls = s_dbgMerged2DDrawsThisFrame;
+    s_lastFrameStats.commandCount = static_cast<std::uint32_t>(s_renderCmds.size());
+    s_lastFrameStats.vertexBytes = s_dbgVtxBytesThisFrame;
+    s_lastFrameStats.textureUploads = s_dbgTextureUploadsThisFrame;
+    s_lastFrameStats.textureCreates = s_dbgTextureCreatesThisFrame;
+    s_lastFrameStats.textureReleases = s_dbgTextureReleasesThisFrame;
+    s_lastFrameStats.pipelineBinds = s_dbgPipelineBindsThisFrame;
+    s_lastFrameStats.samplerBinds = s_dbgSamplerBindsThisFrame;
+    s_lastFrameStats.vertexUniformPushes = s_dbgVertexUniformPushesThisFrame;
+    s_lastFrameStats.fragmentUniformPushes = s_dbgFragmentUniformPushesThisFrame;
+    s_lastFrameStats.renderCommandsReplayed = s_dbgRenderCmdsReplayedThisFrame;
+    s_lastFrameStats.fallbackTextureDraws = s_dbgFallbackTextureThisFrame;
+    s_lastFrameStats.whiteTextureDraws = s_dbgWhiteTextureDrawsThisFrame;
+    s_lastFrameStats.realTextureDraws = s_dbgRealTextureDrawsThisFrame;
+    s_lastFrameStats.geometryCommands = s_dbgGeometryCmdsThisFrame;
+    s_lastFrameStats.droppedDraws = s_dbgDroppedDrawsThisFrame;
+    s_lastFrameStats.filteredDraws = s_dbgFilteredDrawsThisFrame;
+    s_lastFrameStats.batchBreakBlend = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakBlend);
+    s_lastFrameStats.batchBreakDepth = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakDepth);
+    s_lastFrameStats.batchBreakMatrix = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakMatrix);
+    s_lastFrameStats.batchBreakTexture = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakTexture);
+    s_lastFrameStats.batchBreakProgram = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakProgram);
+    s_lastFrameStats.batchBreakUniform = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakUniform);
+    s_lastFrameStats.batchBreakDraw = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakDraw);
+    s_lastFrameStats.batchBreakOther = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakOther);
+    s_lastFrameStats.frameProfilerTextureUploads = FrameProfiler::CounterValue(FrameProfiler::Counter::TextureUploads);
+    s_lastDrawDiagnosticFrame = s_drawDiagnosticFrame;
+    if (s_drawDiagnosticFrame.label != RenderDebugLabel::None)
+    {
+        s_drawDiagnosticHistory[s_drawDiagnosticFrame.frame % s_drawDiagnosticHistory.size()] = s_drawDiagnosticFrame;
+    }
+}
+
+constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-objects.complete";
+
+[[nodiscard]] static const char* RenderDebugLabelText(RenderDebugLabel label)
+{
+    switch (label)
+    {
+    case RenderDebugLabel::StaticObjectsComplete:
+        return kStaticObjectsCompleteDebugLabel;
+    default:
+        return nullptr;
+    }
+}
 
 [[nodiscard]] static bool IsDrawCommand(RenderCmdType type)
 {
@@ -581,7 +810,7 @@ static Render::DrawCommandHistory s_previousDrawCommands;
         return true;
     }
 #endif
-    return type != RenderCmdType::SetViewport && type != RenderCmdType::SetScissor;
+    return type != RenderCmdType::SetViewport && type != RenderCmdType::SetScissor && type != RenderCmdType::DebugLabel;
 }
 
 [[nodiscard]] static bool IsUnsafeInvalidatedDrawCommand(RenderCmdType type)
@@ -604,6 +833,10 @@ static Render::DrawCommandHistory s_previousDrawCommands;
     if (previous.texture != command.texture || previous.sampler != command.sampler)
     {
         return Counter::BatchBreakTexture;
+    }
+    if (s_drawFilter.enabled && s_drawFilter.hasDebugLabel && previous.debugLabel != command.debugLabel)
+    {
+        return Counter::BatchBreakOther;
     }
     if (previous.blendEnabled != command.blendEnabled || previous.blendMode != command.blendMode)
     {
@@ -771,13 +1004,27 @@ static void BindReplayIndexBuffer(SDL_GPUBuffer* buffer, Uint32 offset, SDL_GPUI
     SDL_BindGPUIndexBuffer(s_renderPass, &indexBinding, elementSize);
 }
 
-static void ReplayDrawCommand(const RenderCmd& command, bool boneDataReady, const SDL_Rect& scissor,
-                              Render::SdlGpuReplayState& state)
+static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedOrdinal, bool boneDataReady,
+                              const SDL_Rect& scissor, Render::SdlGpuReplayState& state)
 {
+    ++s_dbgGeometryCmdsThisFrame;
+    if (s_drawFilter.Suppresses({submittedOrdinal, command.textureId, command.textureWidth, command.textureHeight,
+                                 static_cast<std::uint8_t>(command.debugLabel), command.blendEnabled}))
+    {
+        ++s_dbgFilteredDrawsThisFrame;
+        RecordDrawDiagnosticOutcome(command.diagnosticScope, false, false, true);
+        return;
+    }
+
     const bool skinned = command.type == RenderCmdType::DrawSkinnedTriangles;
     if (!command.texture || !command.sampler || (skinned && (!boneDataReady || !s_boneGpuBuf)) ||
         !BindReplayPipeline(command, state, scissor))
     {
+        // Recorded geometry that reaches here is never drawn and nothing else
+        // reports it: the texture lookup already succeeded at record time, so
+        // the fallback counter stays silent while the object is simply absent.
+        ++s_dbgDroppedDrawsThisFrame;
+        RecordDrawDiagnosticOutcome(command.diagnosticScope, false, true, false);
         return;
     }
 
@@ -808,6 +1055,7 @@ static void ReplayDrawCommand(const RenderCmd& command, bool boneDataReady, cons
     else
         SDL_DrawGPUPrimitives(s_renderPass, command.vtxCount, 1, 0, 0);
     ++s_dbgGpuDrawCallsThisFrame;
+    RecordDrawDiagnosticOutcome(command.diagnosticScope, true, false, false);
 }
 
 // CPU-side scratch buffer for quad strip indices accumulated during the frame.
@@ -848,6 +1096,33 @@ static SDL_GPUTexture* s_depthTexture = nullptr;
 static Uint32 s_depthW = 0u;
 static Uint32 s_depthH = 0u;
 static SDL_FColor s_clearColor{0.0f, 0.0f, 0.0f, 1.0f};
+
+#ifdef _EDITOR
+// Editor-only isolated offscreen render captures (e.g. the Map Editor's object
+// preview thumbnails). A capture batches a sub-range of s_renderCmds - recorded
+// between BeginOffscreenCapture()/EndOffscreenCapture() - to be replayed into a
+// dedicated texture instead of the main swapchain. Never used on the normal
+// gameplay rendering path.
+struct PendingOffscreenCapture
+{
+    std::size_t startCmd;
+    std::size_t endCmd;
+    std::uint32_t textureId;
+    Uint32 width;
+    Uint32 height;
+};
+static std::vector<PendingOffscreenCapture> s_pendingOffscreenCaptures;
+static std::size_t s_offscreenCaptureStart = 0u;
+static std::uint32_t s_offscreenCaptureTextureId = 0u;
+static Uint32 s_offscreenCaptureWidth = 0u;
+static Uint32 s_offscreenCaptureHeight = 0u;
+
+// Shared depth buffer for offscreen captures, resized on demand. Captures are
+// processed strictly one at a time (never concurrently), so one is enough.
+static SDL_GPUTexture* s_offscreenDepthTexture = nullptr;
+static Uint32 s_offscreenDepthW = 0u;
+static Uint32 s_offscreenDepthH = 0u;
+#endif
 
 // Story 4.3.2 (AC-10): Fog uniform buffer and transfer buffer.
 static SDL_GPUBuffer* s_fogUniformBuf = nullptr;
@@ -999,8 +1274,7 @@ static void WarmTtfFonts()
     TTF_Font* normal = OpenTtfFontRole(family.family, "normal", family.regular, normalPointSize);
     TTF_Font* bold = OpenTtfFontRole(family.family, "bold", family.bold, normalPointSize);
     TTF_Font* big = OpenTtfFontRole(family.family, "big-bold", family.bold, bigPointSize);
-    TTF_Font* fixed =
-        OpenTtfFontRole(kBundledFixedFont.family, "fixed", kBundledFixedFont.regular, fixedPointSize);
+    TTF_Font* fixed = OpenTtfFontRole(kBundledFixedFont.family, "fixed", kBundledFixedFont.regular, fixedPointSize);
     TTF_Font* fallback = OpenTtfFallbackRole("normal", normalPointSize);
     TTF_Font* fallbackBold = OpenTtfFallbackRole("bold", normalPointSize);
     TTF_Font* fallbackBig = OpenTtfFallbackRole("big-bold", bigPointSize);
@@ -1049,11 +1323,17 @@ static void WarmTtfFonts()
 // TextureRegistry: maps caller-provided uint32_t ids to SDL_GPUTexture*.
 // Accessible from test TU via forward declarations in mu namespace.
 // ---------------------------------------------------------------------------
-static std::unordered_map<std::uint32_t, void*> s_textureMap;
-static std::unordered_map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> s_textureSizes;
+struct TextureRecord
+{
+    void* texture = nullptr;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+};
+
+static std::unordered_map<std::uint32_t, TextureRecord> s_textureMap;
 static std::unordered_set<std::uint32_t> s_ownedTextureIds;
 static std::uint32_t s_cachedTextureId = 0u;
-static void* s_cachedTexture = nullptr;
+static TextureRecord s_cachedTexture;
 static bool s_textureCacheValid = false;
 constexpr std::uint32_t kFirstOwnedDynamicTextureId = 0x60000000u;
 constexpr std::uint32_t kLastOwnedDynamicTextureId = 0x7FFFFFFFu;
@@ -1086,18 +1366,23 @@ static bool s_texturesInvalidated = false;
 // without requiring SDL3 headers. The actual stored type is SDL_GPUTexture*.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] void* LookupTexture(std::uint32_t id)
+[[nodiscard]] static TextureRecord LookupTextureRecord(std::uint32_t id)
 {
     if (s_textureCacheValid && s_cachedTextureId == id)
     {
         return s_cachedTexture;
     }
 
-    auto it = s_textureMap.find(id);
+    const auto it = s_textureMap.find(id);
     s_cachedTextureId = id;
-    s_cachedTexture = it != s_textureMap.end() ? it->second : nullptr;
+    s_cachedTexture = it != s_textureMap.end() ? it->second : TextureRecord{};
     s_textureCacheValid = true;
     return s_cachedTexture;
+}
+
+[[nodiscard]] void* LookupTexture(std::uint32_t id)
+{
+    return LookupTextureRecord(id).texture;
 }
 
 static void InvalidateTextureLookupCache()
@@ -1105,16 +1390,16 @@ static void InvalidateTextureLookupCache()
     s_textureCacheValid = false;
 }
 
-[[nodiscard]] static void* LookupTextureForDraw(std::uint32_t id)
+[[nodiscard]] static TextureRecord LookupTextureForDraw(std::uint32_t id)
 {
-    void* texture = LookupTexture(id);
-    if (texture)
+    TextureRecord texture = LookupTextureRecord(id);
+    if (texture.texture)
     {
         return texture;
     }
 
     ++s_dbgFallbackTextureThisFrame;
-    return s_whiteTexture;
+    return {s_whiteTexture, 1u, 1u};
 }
 
 static void DiscardQueuedTextureUpdates(void* texture)
@@ -1140,17 +1425,17 @@ static bool ReleaseOwnedTextureById(std::uint32_t id)
     auto texture = s_textureMap.find(id);
     if (texture != s_textureMap.end())
     {
-        DiscardQueuedTextureUpdates(texture->second);
-        if (s_device && texture->second)
+        DiscardQueuedTextureUpdates(texture->second.texture);
+        if (s_device && texture->second.texture)
         {
-            SDL_ReleaseGPUTexture(s_device, static_cast<SDL_GPUTexture*>(texture->second));
+            SDL_ReleaseGPUTexture(s_device, static_cast<SDL_GPUTexture*>(texture->second.texture));
             ++s_dbgTextureReleasesThisFrame;
         }
         s_textureMap.erase(texture);
         InvalidateTextureLookupCache();
     }
 
-    s_textureSizes.erase(id);
+    s_ownedTextureIds.erase(owned);
     s_ownedTextureIds.erase(owned);
     s_texturesInvalidated = true;
     return true;
@@ -1164,11 +1449,13 @@ static void ReleaseOwnedTextures()
     }
 }
 
-void RegisterTexture(std::uint32_t id, void* pTex)
+void RegisterTexture(std::uint32_t id, void* texture, std::uint32_t width, std::uint32_t height)
 {
+    const TextureRecord registered{texture, width, height};
     auto existing = s_textureMap.find(id);
-    if (existing != s_textureMap.end() && existing->second == pTex)
+    if (existing != s_textureMap.end() && existing->second.texture == texture)
     {
+        existing->second = registered;
         return;
     }
 
@@ -1176,13 +1463,12 @@ void RegisterTexture(std::uint32_t id, void* pTex)
     existing = s_textureMap.find(id);
     if (existing != s_textureMap.end())
     {
-        DiscardQueuedTextureUpdates(existing->second);
+        DiscardQueuedTextureUpdates(existing->second.texture);
         s_texturesInvalidated = true;
     }
 
-    s_textureMap[id] = pTex;
+    s_textureMap[id] = registered;
     InvalidateTextureLookupCache();
-    s_textureSizes.erase(id);
 }
 
 void UnregisterTexture(std::uint32_t id)
@@ -1195,11 +1481,10 @@ void UnregisterTexture(std::uint32_t id)
     auto texture = s_textureMap.find(id);
     if (texture != s_textureMap.end())
     {
-        DiscardQueuedTextureUpdates(texture->second);
+        DiscardQueuedTextureUpdates(texture->second.texture);
     }
     s_textureMap.erase(id);
     InvalidateTextureLookupCache();
-    s_textureSizes.erase(id);
     s_ownedTextureIds.erase(id);
     // Mark that GPU resources were freed — deferred commands may hold dangling pointers.
     s_texturesInvalidated = true;
@@ -1211,7 +1496,6 @@ void ClearTextureRegistry()
     ReleaseOwnedTextures();
     s_textureMap.clear();
     InvalidateTextureLookupCache();
-    s_textureSizes.clear();
     if (hadTextures)
     {
         s_texturesInvalidated = true;
@@ -1646,6 +1930,8 @@ public:
         s_lastBonePaletteSize = 0u;
         s_lastBonePaletteVersion = 0u;
         s_lastBonePaletteRowOffset = 0u;
+        s_drawDiagnosticFrame = {};
+        s_activeDrawDiagnosticScope = 0u;
         s_texturesInvalidated = false; // Reset per-frame texture invalidation flag
         s_dbgDrawCallsThisFrame = 0u;
         s_dbgVtxBytesThisFrame = 0u;
@@ -1659,6 +1945,9 @@ public:
         s_dbgMerged2DDrawsThisFrame = 0u;
         s_dbgWhiteTextureDrawsThisFrame = 0u;
         s_dbgRealTextureDrawsThisFrame = 0u;
+        s_dbgGeometryCmdsThisFrame = 0u;
+        s_dbgDroppedDrawsThisFrame = 0u;
+        s_dbgFilteredDrawsThisFrame = 0u;
         s_dbgPipelineBindsThisFrame = 0u;
         s_dbgSamplerBindsThisFrame = 0u;
         s_dbgVertexUniformPushesThisFrame = 0u;
@@ -1687,6 +1976,14 @@ public:
             s_cmdBuf = nullptr;
             FailPendingFrameReadback();
             return;
+        }
+        const RenderDebugLabel diagnosticLabel = ActiveDrawDiagnosticLabel();
+        if (diagnosticLabel != RenderDebugLabel::None)
+        {
+            s_drawDiagnosticFrame.frame = s_dbgFrameCount;
+            s_drawDiagnosticFrame.label = diagnosticLabel;
+            s_drawDiagnosticFrame.viewportWidth = s_swapW;
+            s_drawDiagnosticFrame.viewportHeight = s_swapH;
         }
 
         // Story 7.9.7: Fog/alpha uniform is now pushed per-draw-call via
@@ -1906,6 +2203,13 @@ public:
         }
         s_textureUpdates.clear();
 
+#ifdef _EDITOR
+        // Phase 2b (editor-only): replay any pending offscreen captures (e.g. Map
+        // Editor object thumbnails) into their own dedicated textures now that the
+        // GPU vertex buffer holds their data, before the main pass below runs.
+        ProcessPendingOffscreenCaptures(boneDataReady);
+#endif
+
         // ---------------------------------------------------------------
         // Phase 3: Render pass — replay all recorded draw commands.
         // The GPU vertex/index buffers now contain current-frame data.
@@ -1924,11 +2228,9 @@ public:
         if (s_pendingFrameCaptureTextureId != 0u)
         {
             const auto texture = s_textureMap.find(s_pendingFrameCaptureTextureId);
-            const auto size = s_textureSizes.find(s_pendingFrameCaptureTextureId);
-            if (texture != s_textureMap.end() && size != s_textureSizes.end() && size->second.first == s_swapW &&
-                size->second.second == s_swapH)
+            if (texture != s_textureMap.end() && texture->second.width == s_swapW && texture->second.height == s_swapH)
             {
-                reconnectCaptureTexture = static_cast<SDL_GPUTexture*>(texture->second);
+                reconnectCaptureTexture = static_cast<SDL_GPUTexture*>(texture->second.texture);
             }
             s_pendingFrameCaptureTextureId = 0u;
         }
@@ -1973,6 +2275,7 @@ public:
 
             // Replay state and editor commands after texture invalidation, but skip
             // game draws because their deferred texture pointers may be dangling.
+            std::uint32_t submittedOrdinal = 0u;
             Render::SdlGpuReplayState replayState;
             for (const auto& cmd : s_renderCmds)
             {
@@ -1980,6 +2283,12 @@ public:
                 {
                     continue;
                 }
+#ifdef _EDITOR
+                if (cmd.consumedByOffscreenCapture)
+                {
+                    continue; // already drawn into its own offscreen texture above
+                }
+#endif
                 ++s_dbgRenderCmdsReplayedThisFrame;
 
                 switch (cmd.type)
@@ -1997,6 +2306,16 @@ public:
                     s_currentScissor = cmd.scissor;
                     if (replayState.SelectScissor(s_currentScissor))
                         SDL_SetGPUScissor(s_renderPass, &s_currentScissor);
+                    break;
+                }
+
+                case RenderCmdType::DebugLabel:
+                {
+                    const char* label = RenderDebugLabelText(cmd.debugLabel);
+                    if (label)
+                    {
+                        SDL_InsertGPUDebugLabel(s_cmdBuf, label);
+                    }
                     break;
                 }
 
@@ -2019,7 +2338,7 @@ public:
                 case RenderCmdType::DrawIndexedStrip:
                 case RenderCmdType::DrawTriangles2D:
                 {
-                    ReplayDrawCommand(cmd, boneDataReady, s_currentScissor, replayState);
+                    ReplayDrawCommand(cmd, submittedOrdinal++, boneDataReady, s_currentScissor, replayState);
                     break;
                 }
                 } // switch
@@ -2059,6 +2378,7 @@ public:
             }
             else
             {
+                s_pendingFrameReadbackFrame = s_dbgFrameCount;
                 if (SubmitFramePixelDownload(s_cmdBuf, s_frameReadbackTexture, frameReadbackFormat))
                 {
                     s_cmdBuf = nullptr;
@@ -2081,19 +2401,7 @@ public:
         s_swapchainTexture = nullptr;
 
         const auto frameCompletedAt = std::chrono::steady_clock::now();
-        s_lastFrameStats.requestedDrawCalls = s_dbgDrawCallsThisFrame;
-        s_lastFrameStats.submittedDrawCalls = s_dbgGpuDrawCallsThisFrame;
-        s_lastFrameStats.mergedDrawCalls = s_dbgMergedDrawsThisFrame;
-        s_lastFrameStats.merged2DDrawCalls = s_dbgMerged2DDrawsThisFrame;
-        s_lastFrameStats.commandCount = static_cast<std::uint32_t>(s_renderCmds.size());
-        s_lastFrameStats.vertexBytes = s_dbgVtxBytesThisFrame;
-        s_lastFrameStats.textureUploads = s_dbgTextureUploadsThisFrame;
-        s_lastFrameStats.textureCreates = s_dbgTextureCreatesThisFrame;
-        s_lastFrameStats.textureReleases = s_dbgTextureReleasesThisFrame;
-        s_lastFrameStats.pipelineBinds = s_dbgPipelineBindsThisFrame;
-        s_lastFrameStats.samplerBinds = s_dbgSamplerBindsThisFrame;
-        s_lastFrameStats.vertexUniformPushes = s_dbgVertexUniformPushesThisFrame;
-        s_lastFrameStats.fragmentUniformPushes = s_dbgFragmentUniformPushesThisFrame;
+        CaptureLastFrameStats();
         if (IsFrameTimingEnabled())
         {
             const auto milliseconds = [](auto begin, auto end)
@@ -2128,6 +2436,23 @@ public:
             mu::log::Get("render")->warn(
                 "10 frames elapsed with zero draw calls; game may not be calling RenderQuad2D/RenderTriangles");
         }
+    }
+
+    void InsertDebugLabel(RenderDebugLabel label) override
+    {
+        if (!s_frameActive)
+        {
+            return;
+        }
+
+        RenderCmd cmd{};
+        cmd.type = RenderCmdType::DebugLabel;
+        cmd.debugLabel = label;
+        s_renderCmds.push_back(cmd);
+
+        // A label marks a capture boundary, so later geometry must not merge with
+        // the command preceding it.
+        s_previousDrawCommands.fill(kNoDrawCommand);
     }
 
     [[nodiscard]] bool RequestFramePixels() override
@@ -2414,6 +2739,11 @@ public:
         s_statsEnabled = enabled;
     }
 
+    void SetSkinnedPerPixelLightingEnabled(bool enabled) override
+    {
+        m_skinnedPerPixelLightingEnabled = enabled;
+    }
+
     [[nodiscard]] RendererStats GetFrameStats() const override
     {
         return s_lastFrameStats;
@@ -2522,6 +2852,7 @@ public:
 
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawTriangles2D;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(atlasTexture);
         cmd.sampler = sampler ? static_cast<SDL_GPUSampler*>(sampler) : s_defaultSampler;
@@ -2606,8 +2937,7 @@ public:
                 return;
             }
 
-            auto sizeIt = s_textureSizes.find(textureId);
-            if (sizeIt != s_textureSizes.end() && sizeIt->second.first == width && sizeIt->second.second == height)
+            if (existing->second.width == width && existing->second.height == height)
             {
                 return;
             }
@@ -2633,9 +2963,8 @@ public:
             return;
         }
 
-        s_textureMap[textureId] = texture;
+        s_textureMap[textureId] = {texture, width, height};
         InvalidateTextureLookupCache();
-        s_textureSizes[textureId] = {width, height};
         s_ownedTextureIds.insert(textureId);
         ++s_dbgTextureCreatesThisFrame;
     }
@@ -2649,6 +2978,124 @@ public:
 
         ReleaseOwnedTextureById(textureId);
     }
+
+#ifdef _EDITOR
+    // Same shape as EnsureTexture, but with COLOR_TARGET usage added so the result
+    // can be rendered into (not just sampled) - needed for offscreen captures.
+    void EnsureOffscreenColorTexture(std::uint32_t textureId, std::uint32_t width, std::uint32_t height)
+    {
+        if (!s_device || textureId == 0 || width == 0 || height == 0)
+        {
+            return;
+        }
+
+        auto existing = s_textureMap.find(textureId);
+        if (existing != s_textureMap.end())
+        {
+            if (!s_ownedTextureIds.contains(textureId))
+            {
+                return;
+            }
+
+            if (existing->second.width == width && existing->second.height == height)
+            {
+                return;
+            }
+
+            ReleaseOwnedTextureById(textureId);
+        }
+
+        SDL_GPUTextureCreateInfo texInfo{};
+        texInfo.type = SDL_GPU_TEXTURETYPE_2D;
+        texInfo.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        texInfo.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        texInfo.width = width;
+        texInfo.height = height;
+        texInfo.layer_count_or_depth = 1;
+        texInfo.num_levels = 1;
+        texInfo.sample_count = SDL_GPU_SAMPLECOUNT_1;
+
+        SDL_GPUTexture* texture = SDL_CreateGPUTexture(s_device, &texInfo);
+        if (!texture)
+        {
+            mu::log::Get("render")->warn("SDL_gpu -- offscreen capture texture {} creation failed ({}x{}): {}",
+                                         textureId, width, height, SDL_GetError());
+            return;
+        }
+
+        s_textureMap[textureId] = {texture, width, height};
+        InvalidateTextureLookupCache();
+        s_ownedTextureIds.insert(textureId);
+        ++s_dbgTextureCreatesThisFrame;
+    }
+
+    [[nodiscard]] std::uint32_t BeginOffscreenCapture(std::uint32_t textureId, std::uint32_t width,
+                                                      std::uint32_t height) override
+    {
+        if (!s_device || !s_frameActive || width == 0u || height == 0u)
+        {
+            mu::log::Get("render")->warn(
+                "SDL_gpu -- BeginOffscreenCapture precondition failed: device={} frameActive={} w={} h={}",
+                s_device != nullptr, s_frameActive, width, height);
+            return 0u;
+        }
+        if (s_offscreenCaptureTextureId != 0u)
+        {
+            // A capture is already open - BeginOffscreenCapture/EndOffscreenCapture
+            // pairs don't nest. Refuse rather than silently corrupting the other one.
+            mu::log::Get("render")->warn("SDL_gpu -- BeginOffscreenCapture called while another is still open");
+            return 0u;
+        }
+
+        if (textureId == 0u)
+        {
+            textureId = AllocateOwnedDynamicTextureId();
+            if (textureId == 0u)
+            {
+                mu::log::Get("render")->warn("SDL_gpu -- BeginOffscreenCapture: AllocateOwnedDynamicTextureId failed");
+                return 0u;
+            }
+        }
+
+        EnsureOffscreenColorTexture(textureId, width, height);
+        if (!IsTextureRegistered(textureId))
+        {
+            mu::log::Get("render")->warn("SDL_gpu -- BeginOffscreenCapture: texture {} not registered after "
+                                         "EnsureOffscreenColorTexture ({}x{})",
+                                         textureId, width, height);
+            return 0u;
+        }
+
+        s_offscreenCaptureStart = s_renderCmds.size();
+        s_offscreenCaptureTextureId = textureId;
+        s_offscreenCaptureWidth = width;
+        s_offscreenCaptureHeight = height;
+        return textureId;
+    }
+
+    void EndOffscreenCapture() override
+    {
+        if (s_offscreenCaptureTextureId == 0u)
+        {
+            return;
+        }
+
+        s_pendingOffscreenCaptures.push_back({s_offscreenCaptureStart, s_renderCmds.size(), s_offscreenCaptureTextureId,
+                                              s_offscreenCaptureWidth, s_offscreenCaptureHeight});
+        s_offscreenCaptureTextureId = 0u;
+    }
+
+    [[nodiscard]] void* GetTexturePointer(std::uint32_t textureId) const override
+    {
+        const auto it = s_textureMap.find(textureId);
+        return it != s_textureMap.end() ? it->second.texture : nullptr;
+    }
+
+    [[nodiscard]] bool HasPendingOffscreenCaptures() const override
+    {
+        return !s_pendingOffscreenCaptures.empty();
+    }
+#endif // _EDITOR
 
     [[nodiscard]] std::uint32_t CreateTexture(std::uint32_t width, std::uint32_t height, const void* pixels) override
     {
@@ -2676,12 +3123,12 @@ public:
 
         if (textureId != 0u)
         {
-            const auto size = s_textureSizes.find(textureId);
-            if (!s_ownedTextureIds.contains(textureId) || size == s_textureSizes.end())
+            const auto texture = s_textureMap.find(textureId);
+            if (!s_ownedTextureIds.contains(textureId) || texture == s_textureMap.end())
             {
                 textureId = 0u;
             }
-            else if (size->second.first != s_swapW || size->second.second != s_swapH)
+            else if (texture->second.width != s_swapW || texture->second.height != s_swapH)
             {
                 ReleaseOwnedTextureById(textureId);
                 textureId = 0u;
@@ -2706,9 +3153,8 @@ public:
                 return 0u;
             }
 
-            s_textureMap[textureId] = texture;
+            s_textureMap[textureId] = {texture, s_swapW, s_swapH};
             InvalidateTextureLookupCache();
-            s_textureSizes[textureId] = {s_swapW, s_swapH};
             s_ownedTextureIds.insert(textureId);
             ++s_dbgTextureCreatesThisFrame;
         }
@@ -2746,8 +3192,8 @@ public:
             return;
         }
 
-        void* pTex = LookupTextureForDraw(textureId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(textureId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderQuad2D -- unknown textureId {}, skipping", textureId);
             return;
@@ -2796,9 +3242,13 @@ public:
         // Record deferred draw command — replayed in EndFrame after vertex data is on the GPU.
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedQuads;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = textureId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.idxCount = drawQuads * 6;
         cmd.fogUniform = m_fogUniform;
@@ -2853,8 +3303,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        void* pTex = LookupTextureForDraw(resolvedTexId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderTriangles -- unknown textureId {}, skipping", textureId);
             return;
@@ -2890,9 +3340,13 @@ public:
         // Record deferred draw command — replayed in EndFrame after vertex data is on the GPU.
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawTriangles;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.vtxCount = static_cast<Uint32>(vertices.size());
         cmd.vu.mvp = m_mvpMatrix;
@@ -2943,8 +3397,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        void* pTex = LookupTextureForDraw(resolvedTexId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderQuad3D -- unknown textureId {}, skipping", textureId);
             return;
@@ -2986,9 +3440,13 @@ public:
 
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedQuads;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.idxCount = drawQuads * 6u;
         cmd.vu.mvp = m_mvpMatrix;
@@ -3031,8 +3489,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        auto* texture = static_cast<SDL_GPUTexture*>(LookupTextureForDraw(resolvedTexId));
-        if (!texture)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             return false;
         }
@@ -3065,9 +3523,14 @@ public:
 
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawSkinnedTriangles;
+        cmd.debugLabel = m_drawDebugLabel;
+        cmd.diagnosticScope = s_activeDrawDiagnosticScope;
         cmd.pipeline = pipeline;
-        cmd.texture = texture;
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         void* sampler = LookupSampler(resolvedTexId);
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.sampler = sampler ? static_cast<SDL_GPUSampler*>(sampler) : s_defaultSampler;
         cmd.vtxOffset = vtxOffset;
         cmd.vtxCount = static_cast<Uint32>(vertices.size());
@@ -3081,7 +3544,7 @@ public:
         cmd.skinningVu.palette[0] = paletteRowOffset;
         cmd.skinningVu.palette[1] = static_cast<std::uint32_t>(parameters.boneMatrices.size() / 12);
         cmd.skinningVu.palette[2] = parameters.translate ? 1u : 0u;
-        cmd.skinningVu.palette[3] = parameters.lightEnabled ? 1u : 0u;
+        cmd.skinningVu.palette[3] = GetSkinnedLightingMode(parameters.lightEnabled);
         cmd.skinningVu.lightDirection[0] = parameters.lightDirection[0];
         cmd.skinningVu.lightDirection[1] = parameters.lightDirection[1];
         cmd.skinningVu.lightDirection[2] = parameters.lightDirection[2];
@@ -3096,6 +3559,9 @@ public:
         cmd.skinningVu.textureCoordinateParameters[1] = parameters.textureCoordinateOffset[1];
         cmd.skinningVu.textureCoordinateParameters[2] = parameters.chromeTimeTerm;
         cmd.fogUniform = m_fogUniform;
+        cmd.blendMode = m_activeBlendMode;
+        cmd.blendEnabled = m_blendEnabled;
+        RecordSkinnedDiagnosticGeometry(vertices, parameters, m_mvpMatrix);
         s_renderCmds.push_back(cmd);
 
         ++s_dbgDrawCallsThisFrame;
@@ -3118,8 +3584,8 @@ public:
         }
 
         const std::uint32_t resolvedTexId = ResolveTextureId(textureId);
-        void* pTex = LookupTextureForDraw(resolvedTexId);
-        if (!pTex)
+        const TextureRecord texture = LookupTextureForDraw(resolvedTexId);
+        if (!texture.texture)
         {
             mu::log::Get("render")->warn("SDL_gpu::RenderQuadStrip -- unknown textureId {}, skipping", textureId);
             return;
@@ -3178,9 +3644,13 @@ public:
         // Record deferred draw command — replayed in EndFrame after data is on the GPU.
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedStrip;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
-        cmd.texture = static_cast<SDL_GPUTexture*>(pTex);
+        cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
+        cmd.textureId = resolvedTexId;
+        cmd.textureWidth = texture.width;
+        cmd.textureHeight = texture.height;
         cmd.vtxOffset = vtxOffset;
         cmd.idxCount = numIndices;
         cmd.stripIdxOffset = stripIdxByteOffset;
@@ -3188,6 +3658,8 @@ public:
         cmd.vu.fogStart = m_fogUniform.fogStart;
         cmd.vu.fogEnd = m_fogUniform.fogEnd;
         cmd.fogUniform = m_fogUniform;
+        cmd.blendMode = m_activeBlendMode;
+        cmd.blendEnabled = m_blendEnabled;
         s_renderCmds.push_back(cmd);
 
         ++s_dbgDrawCallsThisFrame;
@@ -3203,6 +3675,61 @@ public:
     {
         m_blendEnabled = true;
         m_activeBlendMode = mode;
+    }
+
+    void SetDrawFilter(const Render::DrawFilter& filter) override
+    {
+        s_drawFilter = filter;
+    }
+
+    void SetDrawDebugLabel(RenderDebugLabel label) override
+    {
+        m_drawDebugLabel = label;
+    }
+
+    [[nodiscard]] bool IsDrawDiagnosticScopeEnabled(RenderDebugLabel label) const override
+    {
+        return IsActiveDrawDiagnosticScopeEnabled(label);
+    }
+
+    void BeginDrawDiagnosticScope(RenderDebugLabel label, const float* sourceOrigin) override
+    {
+        if (IsDrawDiagnosticScopeEnabled(label))
+        {
+            m_drawDiagnosticScopeStack.push_back({m_drawDebugLabel, s_activeDrawDiagnosticScope});
+            m_drawDebugLabel = label;
+            StartDrawDiagnosticScope(label, sourceOrigin);
+            return;
+        }
+
+        m_drawDebugLabel = label;
+    }
+
+    void EndDrawDiagnosticScope() override
+    {
+        if (!m_drawDiagnosticScopeStack.empty())
+        {
+            const DrawDiagnosticScopeState previous = m_drawDiagnosticScopeStack.back();
+            m_drawDiagnosticScopeStack.pop_back();
+            CloseDrawDiagnosticScope();
+            m_drawDebugLabel = previous.label;
+            s_activeDrawDiagnosticScope = previous.scope;
+            return;
+        }
+
+        CloseDrawDiagnosticScope();
+        m_drawDebugLabel = RenderDebugLabel::None;
+    }
+
+    [[nodiscard]] DrawDiagnosticSnapshot GetDrawDiagnosticSnapshot(std::uint32_t frame) const override
+    {
+        if (frame == 0u)
+        {
+            return s_lastDrawDiagnosticFrame;
+        }
+
+        const DrawDiagnosticSnapshot& snapshot = s_drawDiagnosticHistory[frame % s_drawDiagnosticHistory.size()];
+        return snapshot.frame == frame ? snapshot : DrawDiagnosticSnapshot{};
     }
 
     // -----------------------------------------------------------------------
@@ -3433,8 +3960,25 @@ private:
         return static_cast<std::uint32_t>(m_boundTextureId);
     }
 
+    [[nodiscard]] std::uint32_t GetSkinnedLightingMode(bool lightEnabled) const
+    {
+        if (!lightEnabled)
+        {
+            return kSkinnedLightingDisabled;
+        }
+
+        return m_skinnedPerPixelLightingEnabled ? kSkinnedLightingFragment : kSkinnedLightingVertex;
+    }
+
     // Per-instance render state.
     BlendMode m_activeBlendMode = BlendMode::Alpha;
+    RenderDebugLabel m_drawDebugLabel = RenderDebugLabel::None;
+    struct DrawDiagnosticScopeState
+    {
+        RenderDebugLabel label;
+        std::uint32_t scope;
+    };
+    std::vector<DrawDiagnosticScopeState> m_drawDiagnosticScopeStack;
     bool m_blendEnabled = true;
     bool m_depthTestEnabled = true;
     bool m_depthMaskEnabled = true;
@@ -3443,6 +3987,7 @@ private:
     bool m_texture2DEnabled = true;
     bool m_fogEnabled = false;
     bool m_colorWriteEnabled = true;
+    bool m_skinnedPerPixelLightingEnabled = false;
     bool m_stencilTestEnabled = false;
     int m_boundTextureId = -1;
     FogParams m_fogParams{};
@@ -4183,6 +4728,123 @@ private:
         return true;
     }
 
+#ifdef _EDITOR
+    // Depth buffer for editor offscreen captures (see BeginOffscreenCapture). Same
+    // shape as CreateOrResizeDepthTexture but keeps its own texture, since it's
+    // sized for a small thumbnail, not the swapchain.
+    static bool EnsureOffscreenDepthTexture(Uint32 width, Uint32 height)
+    {
+        if (width == 0 || height == 0)
+        {
+            return false;
+        }
+        if (s_offscreenDepthTexture && s_offscreenDepthW == width && s_offscreenDepthH == height)
+        {
+            return true;
+        }
+        if (s_offscreenDepthTexture)
+        {
+            SDL_ReleaseGPUTexture(s_device, s_offscreenDepthTexture);
+            s_offscreenDepthTexture = nullptr;
+        }
+
+        SDL_GPUTextureCreateInfo depthInfo{};
+        depthInfo.type = SDL_GPU_TEXTURETYPE_2D;
+        depthInfo.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+        depthInfo.width = width;
+        depthInfo.height = height;
+        depthInfo.layer_count_or_depth = 1;
+        depthInfo.num_levels = 1;
+        depthInfo.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+
+        s_offscreenDepthTexture = SDL_CreateGPUTexture(s_device, &depthInfo);
+        if (!s_offscreenDepthTexture)
+        {
+            mu::log::Get("render")->error("SDL_gpu -- offscreen capture depth texture creation failed ({}x{}): {}",
+                                          width, height, SDL_GetError());
+            s_offscreenDepthW = 0u;
+            s_offscreenDepthH = 0u;
+            return false;
+        }
+
+        s_offscreenDepthW = width;
+        s_offscreenDepthH = height;
+        return true;
+    }
+
+    // Replays each pending offscreen capture's recorded command range (see
+    // BeginOffscreenCapture) into its own dedicated render pass, then marks those
+    // commands consumed so the main pass later skips them instead of drawing them
+    // a second time into the swapchain. Called from EndFrame() after the vertex
+    // buffer upload, before the main render pass begins.
+    void ProcessPendingOffscreenCaptures(bool boneDataReady)
+    {
+        if (s_pendingOffscreenCaptures.empty())
+        {
+            return;
+        }
+
+        for (const auto& capture : s_pendingOffscreenCaptures)
+        {
+            const auto textureIt = s_textureMap.find(capture.textureId);
+            if (textureIt == s_textureMap.end() || !EnsureOffscreenDepthTexture(capture.width, capture.height))
+            {
+                continue;
+            }
+
+            SDL_GPUColorTargetInfo colorTarget{};
+            colorTarget.texture = static_cast<SDL_GPUTexture*>(textureIt->second.texture);
+            colorTarget.clear_color = SDL_FColor{0.10f, 0.10f, 0.12f, 1.0f};
+            colorTarget.load_op = SDL_GPU_LOADOP_CLEAR;
+            colorTarget.store_op = SDL_GPU_STOREOP_STORE;
+
+            SDL_GPUDepthStencilTargetInfo depthTarget{};
+            depthTarget.texture = s_offscreenDepthTexture;
+            depthTarget.clear_depth = 1.0f;
+            depthTarget.load_op = SDL_GPU_LOADOP_CLEAR;
+            depthTarget.store_op = SDL_GPU_STOREOP_DONT_CARE;
+            depthTarget.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            depthTarget.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            depthTarget.cycle = true;
+
+            s_renderPass = SDL_BeginGPURenderPass(s_cmdBuf, &colorTarget, 1, &depthTarget);
+            if (!s_renderPass)
+            {
+                mu::log::Get("render")->warn("SDL_gpu -- offscreen capture render pass failed: {}", SDL_GetError());
+                continue;
+            }
+
+            const SDL_GPUViewport viewport{
+                0.0f, 0.0f, static_cast<float>(capture.width), static_cast<float>(capture.height), 0.0f, 1.0f};
+            SDL_SetGPUViewport(s_renderPass, &viewport);
+            const SDL_Rect scissor{0, 0, static_cast<int>(capture.width), static_cast<int>(capture.height)};
+            SDL_SetGPUScissor(s_renderPass, &scissor);
+
+            Render::SdlGpuReplayState replayState;
+            for (std::size_t i = capture.startCmd; i < capture.endCmd && i < s_renderCmds.size(); ++i)
+            {
+                RenderCmd& cmd = s_renderCmds[i];
+                const bool isGeometryDraw =
+                    cmd.type == RenderCmdType::DrawTriangles || cmd.type == RenderCmdType::DrawSkinnedTriangles ||
+                    cmd.type == RenderCmdType::DrawIndexedQuads || cmd.type == RenderCmdType::DrawIndexedStrip ||
+                    cmd.type == RenderCmdType::DrawTriangles2D;
+                if (!isGeometryDraw)
+                {
+                    continue; // skip SetViewport/SetScissor/EditorOverlay - not relevant to a model capture
+                }
+                ReplayDrawCommand(cmd, static_cast<std::uint32_t>(i - capture.startCmd), boneDataReady, scissor,
+                                  replayState);
+                cmd.consumedByOffscreenCapture = true;
+            }
+
+            SDL_EndGPURenderPass(s_renderPass);
+            s_renderPass = nullptr;
+        }
+
+        s_pendingOffscreenCaptures.clear();
+    }
+#endif // _EDITOR
+
     // -----------------------------------------------------------------------
     // Story 4.3.2 (AC-10): CreateFogUniformBuffers
     // Creates the GPU buffer (s_fogUniformBuf) used as a storage buffer in
@@ -4592,7 +5254,7 @@ private:
         SDL_ReleaseGPUTransferBuffer(s_device, pixelTransfer);
 
         // Register the white texture as textureId=0 (sentinel for "no texture").
-        RegisterTexture(0u, s_whiteTexture);
+        RegisterTexture(0u, s_whiteTexture, 1u, 1u);
 
         return true;
     }

@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "Scenes/SceneFixture.h"
 #include "Render/Models/ZzzBMD.h"
 #include "Engine/Object/ZzzInfomation.h"
 #include "Engine/Object/ZzzObject.h"
@@ -733,6 +734,17 @@ void CalcFPS()
     // animate with no less than REFERENCE_FPS, otherwise some animations don't work correctly
     const double fpsRatio = (FPS <= 0.0) ? 0.0 : REFERENCE_FPS / FPS;
     FPS_ANIMATION_FACTOR = std::clamp(static_cast<float>(fpsRatio), 0.f, 1.f);
+
+    // A scene fixture pins the factor: it is derived from the real frame duration, so every animation that scales
+    // by it advances by wall-clock time. Two capture runs then reach the captured frame with slightly different
+    // accumulated animation, which moved static-object geometry by a pixel or two and made the Lost Tower crystal
+    // caps come out bright in one run and dark in the next -- 0.3% of the frame, against 0.03% on the historical
+    // client, which has no such factor. Pinning it to one reference step per frame makes "N frames after the
+    // fixture is ready" a deterministic amount of animation.
+    if (SceneFixture::IsActive())
+    {
+        FPS_ANIMATION_FACTOR = 1.f;
+    }
 
     // Calculate average fps every 2 seconds or 25 frames
     const double diffSinceStart = WorldTime - start;

@@ -23,6 +23,36 @@
   consumers. State such as body scale, bone scale, and translate mode must be
   captured when the deferred transform is requested, not read later from
   mutable globals.
+- The shared global `::BoneTransform` must be materialized by `BMD::Transform()`
+  before another `Animation()` can replace it. Debug builds assert on a deferred
+  CPU consumer that observes the replacement; make that transform eager rather
+  than copying a stale palette (#547).
+- The guard was observed catching the defect it exists for, and the numbers are worth
+  keeping because the log they came from is overwritten by the next run. With the
+  eager-skin fix absent, a Magic Gladiator killing a monster in Lost Tower produced:
+
+      [DXP-20] deferred shared BoneTransform replaced before skinning
+               (BMD=0x7eaf9538e428, captured=1, current=2)
+
+  `captured=1, current=2` is the whole mechanism in two integers: the object armed its
+  deferral against generation 1 of the shared palette and something wrote generation 2
+  before the skinning consumed it. Counters across two runs of the same scenario read
+  `captures=59288 validations=483 divergences=0` before the fix and
+  `captures=93627 validations=0 divergences=0` after it. The 483 matter as much as the
+  divergence: they prove the validation seam is reachable rather than dead, and they go
+  to zero afterwards because an eagerly skinned global palette leaves no deferred
+  request to validate.
+
+- Reproducing this in Debug needs the bounded bitmap diagnostic formatting fix
+  (upstream #603). Without it the fortified `mu_swprintf` in `GlobalBitmap.cpp` aborts
+  the client before login, and no scenario runs at all.
+
+- Debug-only `$bonepalette` reports cumulative shared-palette captures,
+  deferred-consumer validations, and detected divergences. With a confirmed bad
+  frame, `captures == 0` means the capture seam is wrong; `captures > 0` with
+  `validations == 0` means the path does not consume through `EnsureCpu*()`; and
+  positive captures and validations with zero divergences means an uncounted
+  writer or a replaced per-transform request is evading the guard.
 - Cloth, shadow-volume, shadow-map, and vertex-wave paths intentionally remain
   CPU consumers. GPU eligibility must not bypass their materialization calls.
 

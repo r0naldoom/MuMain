@@ -103,6 +103,164 @@ $env:MU_D3D12_DISABLE_TRIANGLE_MERGING = "1"
 .\Main.exe
 ```
 
+### RenderDoc semantic object-pass label
+
+The static-object completion label is disabled by default. Enable it only for a
+RenderDoc capture:
+
+```bash
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file scene-anchor ./Main
+```
+
+The enabled label is `mu.scene.static-objects.complete`. It marks the command
+stream immediately after the initial static-object pass and before character
+rendering. Verify a capture with:
+
+```bash
+rdc --session scene-anchor open scene-anchor.rdc
+rdc --session scene-anchor events --filter 'mu.scene.static-objects.complete' --json
+rdc --session scene-anchor close
+```
+
+The label itself has no render target. A frame comparator resolves the preceding
+rendered event on the same target. Without `MU_RENDERDOC_LABELS`, the client
+does not enqueue a label command or call the GPU debug-label API.
+
+### Lost Tower wall fixture
+
+The current SDL GPU client accepts a reproducible static-object fixture:
+
+```bash
+ulimit -n 65536
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file lost-tower-wall \
+  ./Main --scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture
+```
+
+The selector is parsed from `lpszCommandLine`: Windows supplies that command
+line and the Linux entry point forwards `argv` into it. The historical a410
+Linux client did not forward `argv`; keep its compatibility patch local and
+version it with the comparison fixture rather than changing its tracked
+history.
+
+`lost-tower-wall-v1` pins the current client to a windowed `800×600` target,
+Lost Tower map `4`, and grid position `(213, 74)`. The position lies inside the
+Lost Tower safe zone, where the client terrain attribute `0x01` covers x
+`198..213` and y `70..75`; monsters neither enter nor attack there, which keeps
+combat lighting out of the scene (see "Dynamic light reaches the anchor"
+below). The south wall (y `69`) and the east wall (x `214..215`) meet at
+`(214, 69)`, next to the position, so the Default camera frames that wall
+corner instead of open floor. The tile itself was chosen by driving a
+client over the developer control socket and reading `state` and `screenshot`
+at every candidate inside the safe zone: at `(213, 74)` the wall runs
+diagonally across the frame with the crystal-capped pillars in view, and a
+36-second sample kept a single monster in `nearby`, wandering 9 to 11 tiles
+away. `(213, 72)` sits on a wander path and caught a monster in melee range
+with its aura in frame; `(211, 71)` and `(208, 72)` report five monsters and
+frame mostly floor. A monster inside the safe zone cannot attack, but its
+effects still light the scene, so require `nearby` to hold no monster within 8
+tiles before a capture and retry when it does. The fixture applies its
+target after loading `config.ini` and before SDL creates the window, so a saved
+fullscreen or display resolution cannot alter a capture. Its world viewport
+reserves the legacy `48` reference pixels rather than the gameplay HUD's `51`;
+this fixture-only override removes a known geometric delta from cross-build
+material comparisons and is not a judgment on the new HUD design. The
+historical client already reserves `48` reference pixels, and its local
+comparison patch MUST apply the same windowed target.
+
+Place the dedicated fixture character on map `4`, grid `(213, 74)`, before a
+parity run. Run the placement update while the client is closed: it otherwise
+saves its in-memory position on logout and overwrites the database value. The
+following SQL is a template; substitute the dedicated character name and keep
+credentials and local paths out of tracked documentation:
+
+```sql
+UPDATE data."Character" SET "PositionX" = 213, "PositionY" = 74
+WHERE "Name" = '<fixture-character>';
+SELECT "Name", "PositionX", "PositionY" FROM data."Character"
+WHERE "Name" = '<fixture-character>';
+```
+
+Because version 1 does not set camera state in-process, verify before each
+capture pair that both builds have the same `[Camera] Zoom` value in
+`config.ini`. The reference pair uses `Zoom=1735`; recheck it after any manual
+zoom or configuration change and record the value with the capture result.
+
+The fixture becomes ready only after the server's join or revival packet
+reports exactly that map and position. A mismatch emits `[SceneFixture] ... is
+not ready`; readiness gates only the automatic capture scheduler, so a capture
+cannot be reported as fixture-ready accidentally.
+
+While selected, the fixture freezes the clock around the main-scene update,
+where Lost Tower derives static-object texture coordinates. It restores
+wall-clock time before reconnect/network work, then freezes the render clock
+again. Version 1 deliberately does not override the camera or static-object
+luminosity: reproducible camera state comes from the positioned, stationary
+character. The legacy comparison patch drops the unused `rand()` brightness
+value from the Lost Tower static-object branch, as #609 did in the current
+client. Both clients seed `rand()` from wall-clock time at startup, so random
+sequences differ between launches regardless of how many values either build
+consumes; aligning random consumption cannot make a capture reproducible.
+
+#### Dynamic light reaches the anchor
+
+The `mu.scene.static-objects.complete` anchor precedes the character and effect
+passes, so monsters, skills, and effects are not drawn into the anchored render
+target. Their light is. Effects add dynamic terrain light while they move, before
+the scene renders, and that light tints both the terrain and every static object
+standing in it. A monster attack near the fixture can therefore turn part of the
+wall orange at the anchor while no monster pixel appears there.
+
+Two legacy-client captures taken at grid `(91, 183)`, outside the safe zone,
+differed in 8.4% of the wall region. In the later launch monsters had reached
+the character and a combat effect above one wall section was lighting it; the
+earlier launch had neither. The affected pixels came from the same draws at the
+same depths, with red and green raised and blue unchanged.
+
+Before accepting a capture, export its final render target and confirm that no
+monster, skill, or other effect is active near the measured region.
+
+`--capture-when-ready` is opt-in; without it, the fixture leaves RenderDoc's
+manual F12 capture unchanged. With it, the fixture waits 240 rendered frames
+following readiness before calling RenderDoc's in-process trigger. Record
+`warmup_frames = 240` in the comparison manifest. `--exit-after-capture`
+posts the normal clean-shutdown event two completed frames after that capture,
+so `renderdoccmd --wait-for-exit` can finalize the `.rdc`. RenderDoc captures
+the frame after the trigger call. If the client was not launched under RenderDoc,
+the automatic trigger emits one diagnostic line, does nothing, and does not
+request shutdown.
+
+#### Independent-capture check
+
+Capture two separate client launches; do not reuse a process or substitute a
+numeric RenderDoc event ID:
+
+```bash
+ulimit -n 65536
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file fixture-run-a \
+  ./Main --scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture
+MU_RENDERDOC_LABELS=1 renderdoccmd capture --wait-for-exit --capture-file fixture-run-b \
+  ./Main --scene=lost-tower-wall-v1 --capture-when-ready --exit-after-capture
+```
+
+After logging in once, let each client observe the matching server spawn. The
+fixture then captures and exits automatically. In the comparator manifest,
+configure both render targets with:
+
+```toml
+anchor="mu.scene.static-objects.complete"
+color_target=0
+```
+
+The comparator resolves the rendered event immediately preceding that anchor.
+Record the capture hashes, revision, data and font identifiers, backend, GPU,
+driver, window mode, VSync, frame limit, and display size with the result.
+
+The fixture proves reproducibility of the anchored static-object render target
+between independent launches under the same executable, data, fonts, machine,
+GPU driver, backend, resolution, and runtime settings. It does not prove
+parity between operating systems, GPU drivers, GPUs, resolutions, or a final
+frame after character and UI passes. Measure those targets separately.
+
 Then:
 
 1. Enable `$glstats on`.

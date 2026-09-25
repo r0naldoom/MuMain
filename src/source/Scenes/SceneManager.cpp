@@ -4,6 +4,7 @@
 
 #include "stdafx.h"
 #include "Core/Input/KeyState.h"
+#include "Core/Input/SyntheticInput.h"
 #include <vector>
 #include <algorithm>
 #include <numeric>
@@ -50,6 +51,7 @@ FrameTimingState g_frameTiming;
 #include "App/Platform/Windows/Winmain.h"
 #include "Camera/CameraManager.h"
 #include "Camera/CameraMode.h"
+#include "Scenes/SceneFixture.h"
 
 #ifdef _EDITOR
 #include "../MuEditor/Core/MuEditorCore.h"
@@ -228,7 +230,40 @@ static void GenerateScreenshotFilename(wchar_t* outFileName, wchar_t* outMessage
     wcscat(outMessage, lpszTemp);
 }
 
+/**
+ * @brief Names a scripted capture that was given no path of its own.
+ *
+ * Seconds and a counter of this process' own keep two captures of the same
+ * minute apart; the player's rolling counter and the shared `GrabFileName`
+ * buffer stay untouched, so a pending Print Screen still reports its own name.
+ */
+static std::wstring GenerateScriptedScreenshotFilename()
+{
+    static int scriptedCaptureCount = 0;
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    wchar_t fileName[256];
+    mu_swprintf(fileName, L"Screen(%02d_%02d-%02d_%02d_%02d)-%04d.jpg", st.wMonth, st.wDay, st.wHour, st.wMinute,
+                st.wSecond, scriptedCaptureCount);
+    scriptedCaptureCount = (scriptedCaptureCount + 1) % 10000;
+
+    return fileName;
+}
+
 static ScreenshotCaptureState g_screenshotCapture;
+
+// Set while a scripted capture (control socket) is pending; a human's Print
+// Screen leaves it empty and behaves exactly as before.
+static ScreenshotCompletion g_screenshotCompletion;
+
+// The readback is only ready on a later frame than the one that asked for it,
+// and a request may arrive either before or after this frame's consume pass
+// (Print Screen comes from the scene update, a scripted capture from the
+// control socket's poll). Give the renderer a few frames before giving up.
+constexpr int MaxScreenshotConsumeAttempts = 3;
+static int g_screenshotConsumeAttempts = 0;
 
 static bool PrepareJpegPixels(mu::FramePixels& pixels)
 {
@@ -248,6 +283,26 @@ static bool PrepareJpegPixels(mu::FramePixels& pixels)
     return true;
 }
 
+// Hands the outcome to a scripted caller, if one is waiting, and forgets it.
+// A failed capture is reported too, so no caller waits for its deadline.
+static void ReportScreenshotOutcome(bool saved, const std::wstring& path, std::uint32_t frame, int width, int height)
+{
+    if (!g_screenshotCompletion)
+    {
+        return;
+    }
+
+    ScreenshotCompletion completion;
+    completion.swap(g_screenshotCompletion);
+    completion(ScreenshotOutcome{saved, path, frame, width, height});
+}
+
+static void FinishScreenshot(bool saved, const std::wstring& path, std::uint32_t frame, int width, int height)
+{
+    ReportScreenshotOutcome(saved, path, frame, width, height);
+    g_screenshotCapture.Clear();
+}
+
 static void ConsumeScreenshot()
 {
     if (!g_screenshotCapture.HasPending())
@@ -255,30 +310,72 @@ static void ConsumeScreenshot()
         return;
     }
 
+    const std::wstring fileName = g_screenshotCapture.FileName();
+
     mu::FramePixels pixels;
     if (!mu::GetRenderer().ConsumeFramePixels(pixels))
     {
-        g_screenshotCapture.Clear();
+        ++g_screenshotConsumeAttempts;
+        if (g_screenshotConsumeAttempts < MaxScreenshotConsumeAttempts)
+        {
+            return;
+        }
+
+        FinishScreenshot(false, fileName, 0, 0, 0);
         return;
     }
 
     if (!PrepareJpegPixels(pixels))
     {
-        g_screenshotCapture.Clear();
+        FinishScreenshot(false, fileName, 0, 0, 0);
         return;
     }
 
-    std::wstring fileName = g_screenshotCapture.FileName();
-    const bool saved = WriteJpeg(fileName.data(), static_cast<int>(pixels.width), static_cast<int>(pixels.height),
-                                 pixels.rgb.data(), 100);
-    if (saved)
+    const int width = static_cast<int>(pixels.width);
+    const int height = static_cast<int>(pixels.height);
+    std::wstring writtenName = fileName;
+    const bool saved = WriteJpeg(writtenName.data(), width, height, pixels.rgb.data(), 100);
+
+    // A scripted capture has no message: the system log belongs to the player's
+    // own Print Screen, and so does the rolling screenshot counter.
+    const bool isPlayerCapture = !g_screenshotCapture.Message().empty();
+    if (saved && isPlayerCapture)
     {
         g_pSystemLogBox->AddText(g_screenshotCapture.Message().c_str(), SEASON3B::TYPE_SYSTEM_MESSAGE);
     }
 
-    GrabScreen++;
-    GrabScreen %= 10000;
-    g_screenshotCapture.Clear();
+    if (isPlayerCapture)
+    {
+        GrabScreen++;
+        GrabScreen %= 10000;
+    }
+
+    FinishScreenshot(saved, fileName, pixels.frame, width, height);
+}
+
+// Starts a capture of the next rendered frame. `message` is the system-log line
+// the player sees; a scripted capture passes none.
+static bool BeginScreenshotCapture(const std::wstring& fileName, const std::wstring& message)
+{
+    if (!g_screenshotCapture.Begin(fileName, message))
+    {
+        return false;
+    }
+
+    g_screenshotConsumeAttempts = 0;
+
+    // A previous capture may have given up waiting for its pixels; they can
+    // still arrive, and this capture must not report the earlier frame.
+    mu::FramePixels stale;
+    (void)mu::GetRenderer().ConsumeFramePixels(stale);
+
+    if (!mu::GetRenderer().RequestFramePixels())
+    {
+        g_screenshotCapture.Clear();
+        return false;
+    }
+
+    return true;
 }
 
 static void RequestScreenshot()
@@ -286,16 +383,40 @@ static void RequestScreenshot()
     wchar_t screenshotText[256];
     GenerateScreenshotFilename(GrabFileName, screenshotText);
 
-    if (!g_screenshotCapture.Begin(GrabFileName, screenshotText))
+    (void)BeginScreenshotCapture(GrabFileName, screenshotText);
+}
+
+void CancelScriptedScreenshot()
+{
+    if (!g_screenshotCapture.HasPending())
     {
         return;
     }
 
-    if (!mu::GetRenderer().RequestFramePixels())
+    g_screenshotCapture.Clear();
+    g_screenshotCompletion = nullptr;
+}
+
+bool RequestScriptedScreenshot(const std::wstring& path, ScreenshotCompletion onComplete)
+{
+    if (g_screenshotCapture.HasPending())
     {
-        g_screenshotCapture.Clear();
-        return;
+        return false;
     }
+
+    std::wstring fileName = path;
+    if (fileName.empty())
+    {
+        fileName = GenerateScriptedScreenshotFilename();
+    }
+
+    if (!BeginScreenshotCapture(fileName, L""))
+    {
+        return false;
+    }
+
+    g_screenshotCompletion = std::move(onComplete);
+    return true;
 }
 
 /**
@@ -345,6 +466,9 @@ static void UpdateActiveScene()
  */
 void UpdateSceneState()
 {
+    // Scripted input advances here, once per rendered frame, so the scan
+    // below sees an injected key or click exactly as it sees a device.
+    Core::Input::Synthetic::BeginFrame();
     g_pNewKeyInput->ScanAsyncKeyState();
     g_dwMouseUseUIID = 0;
 
@@ -1310,7 +1434,21 @@ void MainScene(HDC hDC)
 void RenderScene(HDC hDC)
 {
     CalcFPS();
+
+    const bool freezeFixtureUpdate = SceneFlag == MAIN_SCENE && SceneFixture::IsActive();
+    const double worldTimeBeforeFixtureUpdate = WorldTime;
+    if (freezeFixtureUpdate)
+    {
+        // MoveMainScene derives static-object UVs before the anchor render pass.
+        SceneFixture::ApplyWorldTime(WorldTime);
+    }
+
     UpdateSceneState();
+
+    if (freezeFixtureUpdate)
+    {
+        WorldTime = worldTimeBeforeFixtureUpdate;
+    }
 
     // Drive auto-reconnect after the scene loops have advanced this frame. It
     // runs across all scenes because reconnect passes through the login,
@@ -1321,6 +1459,11 @@ void RenderScene(HDC hDC)
 
     try
     {
+        if (SceneFlag == MAIN_SCENE)
+        {
+            SceneFixture::ApplyWorldTime(WorldTime);
+        }
+
         g_Luminosity = sinf(WorldTime * 0.004f) * 0.15f + 0.6f;
         switch (SceneFlag)
         {

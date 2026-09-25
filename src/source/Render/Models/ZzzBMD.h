@@ -14,6 +14,17 @@ extern const float (*g_pActiveBoneTransform)[3][4];
 extern unsigned int g_BoneTransformVersion;
 void SetActiveBoneTransform(const float (*ptr)[3][4]);
 
+#ifdef _DEBUG
+struct SharedBonePaletteGuardCounters
+{
+    unsigned int Captures;
+    unsigned int Validations;
+    unsigned int Divergences;
+};
+
+[[nodiscard]] SharedBonePaletteGuardCounters GetSharedBonePaletteGuardCounters();
+#endif
+
 #define MAX_BONES    200
 #define MAX_MESH     50
 #define MAX_VERTICES 15000
@@ -220,6 +231,7 @@ public:
     bool				m_bCompletedAlloc;
 
     float (*m_pCurrentBoneTransform)[3][4]; // Active bone matrix palette stored during Transform()
+    bool m_UsesSharedGlobalBoneTransform;   // Palette was the global BoneTransform at TransformCheap() time.
     bool m_LastTranslate;       // Set by Transform(): true=Translate mode (BodyOrigin/BodyScale shift world pos),
                                 // false=non-Translate mode (bone matrices already encode world position)
     vec3_t m_LastLightPosition; // Set by Transform() when LightEnable: the per-body light direction
@@ -240,11 +252,20 @@ public:
                                               // m_SkinStamp
     float m_LastSkinScale;                    // Transform()'s `_Scale` arg, stashed for deferred materialization
     float m_LastBoneScale; // global BoneScale AT TransformCheap() time (callers mutate the global right after)
+#ifdef _DEBUG
+    // Generation of the shared palette captured by TransformCheap(); EnsureCpu*() asserts before
+    // consuming it if another Animation() overwrote the palette in the meantime (#547).
+    mutable bool m_DebugDeferredSharedBonePalette;
+    unsigned int m_DebugSharedBonePaletteGeneration;
+#endif
 
     BMD()
         : NumBones(0), NumActions(0), NumMeshs(0), Meshs(NULL), Bones(NULL), Actions(NULL), Textures(NULL),
-          IndexTexture(NULL), m_pCurrentBoneTransform(nullptr), m_LastTranslate(false), m_SkinStamp(0),
-          m_LastSkinScale(0.f), m_LastBoneScale(1.f)
+          IndexTexture(NULL), m_pCurrentBoneTransform(nullptr), m_UsesSharedGlobalBoneTransform(false),
+          m_LastTranslate(false), m_SkinStamp(0), m_LastSkinScale(0.f), m_LastBoneScale(1.f)
+#ifdef _DEBUG
+          , m_DebugDeferredSharedBonePalette(false), m_DebugSharedBonePaletteGeneration(0)
+#endif
     {
         m_LastLightPosition[0] = m_LastLightPosition[1] = m_LastLightPosition[2] = 0.f;
         for (int _i = 0; _i < MAX_MESH; _i++)

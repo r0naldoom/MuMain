@@ -35,8 +35,14 @@ struct VSOutput
     float2 uv : TEXCOORD0;
     float4 color : TEXCOORD1;
     float fogFactor : TEXCOORD2;
+    float3 lightingNormal : TEXCOORD3;
+    nointerpolation uint lightingMode : TEXCOORD4;
+    nointerpolation float3 lightDirection : TEXCOORD5;
     float clipDist : SV_ClipDistance0;
 };
+
+static const uint SkinnedLightingVertex = 1u;
+static const uint SkinnedLightingFragment = 2u;
 
 #ifdef MU_D3D12_RAW_STORAGE_BUFFER
 float4 loadBoneRow(uint row)
@@ -163,11 +169,18 @@ VSOutput main(VSInput input)
     output.pos = mul(mvp, float4(skinnedPosition, 1.0));
     output.uv = getTextureCoordinates(input.uv, skinnedNormal);
     output.color = input.color;
+    output.lightingNormal = float3(0.0, 0.0, 0.0);
+    output.lightingMode = palette.w;
+    output.lightDirection = lightDirection.xyz;
 
-    if (palette.w != 0)
+    if (palette.w == SkinnedLightingVertex)
     {
         const float luminosity = max(dot(skinnedNormal, lightDirection.xyz) * 0.8 + 0.4, 0.2);
         output.color.rgb = saturate(output.color.rgb * luminosity);
+    }
+    else if (palette.w == SkinnedLightingFragment)
+    {
+        output.lightingNormal = skinnedNormal;
     }
 
     output.clipDist = output.pos.w - 1.0;
