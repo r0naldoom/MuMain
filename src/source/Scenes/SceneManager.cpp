@@ -297,6 +297,12 @@ static void ReportScreenshotOutcome(bool saved, const std::wstring& path, std::u
     completion(ScreenshotOutcome{saved, path, frame, width, height});
 }
 
+static void FinishScreenshot(bool saved, const std::wstring& path, std::uint32_t frame, int width, int height)
+{
+    ReportScreenshotOutcome(saved, path, frame, width, height);
+    g_screenshotCapture.Clear();
+}
+
 static void ConsumeScreenshot()
 {
     if (!g_screenshotCapture.HasPending())
@@ -315,13 +321,13 @@ static void ConsumeScreenshot()
             return;
         }
 
-        ReportScreenshotOutcome(false, fileName, 0, 0, 0);
+        FinishScreenshot(false, fileName, 0, 0, 0);
         return;
     }
 
     if (!PrepareJpegPixels(pixels))
     {
-        ReportScreenshotOutcome(false, fileName, 0, 0, 0);
+        FinishScreenshot(false, fileName, 0, 0, 0);
         return;
     }
 
@@ -344,7 +350,7 @@ static void ConsumeScreenshot()
         GrabScreen %= 10000;
     }
 
-    ReportScreenshotOutcome(saved, fileName, pixels.frame, width, height);
+    FinishScreenshot(saved, fileName, pixels.frame, width, height);
 }
 
 // Starts a capture of the next rendered frame. `message` is the system-log line
