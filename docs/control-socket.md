@@ -111,6 +111,11 @@ separate from `stats`: `stats` remains the fixed counter snapshot used by map
 sweeps. The result is a measurement, not a pass/fail judgement; `muframe
 live-inspect` records it beside the isolated PNG and socket `state`.
 
+A scope may have zero projected triangles and no `projected_bbox` when it is
+offscreen or fully clipped. That is a valid live measurement, not a missing
+object: live scope accounting preserves the case that the offline image rule
+cannot inspect.
+
 `state` reports the scene and account on every screen, and in the world adds:
 character name, class, level, experience, zen, HP/mana/SD/AG with their
 maxima, map number and name, position, alive flag, safe-zone flag, current
