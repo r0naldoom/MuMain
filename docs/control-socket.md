@@ -71,7 +71,7 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 | `nearby` | the objects the client can see |
 | `events` (`since`, `follow`) | recorded events, or a live stream of them |
 | `wait-for` (`event`, `match`, `timeout`) | block until a matching event arrives |
-| `screenshot` (`out`) | capture the next frame to a path; without `out` it names itself, uniquely per capture |
+| `screenshot` (`out`) | capture the next frame to a path and return its frame number; without `out` it names itself, uniquely per capture |
 | `hotkey` (`key`) | press one game key for a frame: `esc`, `i`, `home`, `f1`, … |
 | `click-ui` (`x`, `y`, `button`) | click a window pixel (`left` by default) |
 | `login` (`account`, `password`, `server`) | server selection, credentials, character list |
@@ -87,6 +87,7 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 | `say` (`text`), `whisper` (`name`, `text`) | chat, including `/` commands |
 | `console` (`text`) | execute a local `$` diagnostic command; never sends chat. Unknown or malformed text returns `bad_request`; a Debug-only command in Release returns `not_allowed`. |
 | `draw-filter` (`texture_id`, `texture_width`/`texture_height`, `blend`, `submitted_ordinal_first`/`submitted_ordinal_last`, `category`, `only`) | suppresses replayed geometry matching every supplied clause; `only:true` replays only matching geometry. Categories are `ground_item`, `inventory_preview`, and `weapon_effect`. `clear:true` restores normal replay. |
+| `draw-diagnostic` (`category`, `frame`) | returns an isolated diagnostic measurement. Phase 1 accepts `ground_item`; `frame` selects the matching recent screenshot frame and it reports each scope's source origin, effective skinning origin, projected bounds, and draw accounting. |
 | `party` (`action`, `target`) | `invite`, `accept`, `decline`, `leave` |
 | `halt` | stop the walk or repeated attack in progress |
 
@@ -98,6 +99,17 @@ counter names, plus `frame`, which is the completed frame number. Read the comma
 is a draw that requested an unavailable texture and used the white fallback. Divide it by
 `s_dbgRealTextureDrawsThisFrame` to compare fallback rates between maps. `BatchBreak*` and `TextureUploads`
 come from `FrameProfiler`; they are zero unless the existing profiler counters are enabled.
+
+### Ground-item isolation measurement
+
+Set `draw-filter` to `{"category":"ground_item","only":true}`, wait for a later
+frame, then request a `screenshot` and retain its returned `frame`. Read
+`draw-diagnostic` with the same category and that frame. The client retains the
+four most recent isolated measurements; a missing frame is an error, not a
+substitution of a newer draw. Its variable-length scope records are intentionally
+separate from `stats`: `stats` remains the fixed counter snapshot used by map
+sweeps. The result is a measurement, not a pass/fail judgement; `muframe
+live-inspect` records it beside the isolated PNG and socket `state`.
 
 `state` reports the scene and account on every screen, and in the world adds:
 character name, class, level, experience, zen, HP/mana/SD/AG with their

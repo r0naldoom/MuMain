@@ -126,6 +126,7 @@ struct ScreenshotOutcome
 {
     bool saved = false;
     std::wstring path;
+    std::uint32_t frame = 0;
     int width = 0;
     int height = 0;
 };

@@ -2,6 +2,7 @@
 #include "App/Control/ControlCommands.h"
 
 #include "App/Control/ControlEvents.h"
+#include "App/Control/ControlDrawDiagnostic.h"
 #include "App/Control/ControlState.h"
 #include "App/Control/ControlStats.h"
 #include "Core/Input/SyntheticInput.h"
@@ -298,6 +299,7 @@ public:
 
         json result;
         result["path"] = path;
+        result["frame"] = outcome.frame;
         result["width"] = outcome.width;
         result["height"] = outcome.height;
         response = App::Control::EncodeResult(EncodedId(), result.dump());
@@ -494,6 +496,11 @@ std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
 
     mu::GetRenderer().SetDrawFilter(filter);
     return EncodeResult(request.EncodedId(), R"({"enabled":true})");
+}
+
+std::string DrawDiagnostic(const Request& request, std::unique_ptr<Act>&)
+{
+    return App::Control::Diagnostics::Draw(request);
 }
 
 std::string Scene(const Request& request, std::unique_ptr<Act>&)

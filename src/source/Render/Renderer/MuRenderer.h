@@ -11,6 +11,7 @@
 //   - No #ifdef _WIN32 in game logic — cross-platform via stubs.
 #pragma once
 
+#include "DrawDiagnostics.h"
 #include "FramePixelReadback.h"
 
 #include <cstdint>
@@ -168,15 +169,6 @@ struct RendererStats
     double submitMilliseconds = 0.0;
 };
 
-enum class RenderDebugLabel : std::uint8_t
-{
-    None,
-    StaticObjectsComplete,
-    GroundItem,
-    InventoryPreview,
-    WeaponEffect,
-};
-
 // ---------------------------------------------------------------------------
 // IMuRenderer: Pure abstract rendering interface.
 // Game code obtains the active backend via GetRenderer() (see below).
@@ -214,6 +206,8 @@ public:
 
     // Applies a semantic label to geometry recorded until the next call.
     virtual void SetDrawDebugLabel(RenderDebugLabel /*label*/) {}
+    virtual void BeginDrawDiagnosticScope(RenderDebugLabel /*label*/, const float* /*sourceOrigin*/) {}
+    virtual void EndDrawDiagnosticScope() {}
 
     // Set the active alpha-blending equation.
     virtual void SetBlendMode(BlendMode mode) = 0;
@@ -234,6 +228,7 @@ public:
 
     // Suppresses recorded SDL GPU geometry selected by an immutable diagnostic predicate.
     virtual void SetDrawFilter(const Render::DrawFilter& /*filter*/) {}
+    [[nodiscard]] virtual DrawDiagnosticSnapshot GetDrawDiagnosticSnapshot() const { return {}; }
     virtual void SetFogEnabled(bool /*enabled*/) {}
 
     // Bind texture by game bitmap index. SDL_gpu resolves this to SDL_GPUTexture*
@@ -443,12 +438,10 @@ public:
         return false;
     }
 #endif // _EDITOR
-
-    // -----------------------------------------------------------------------
-    // Story 7-9-6: GL state migration — replaces raw OpenGL calls.
-    // Default implementations are no-ops; SDL_gpu backend overrides them.
-    // -----------------------------------------------------------------------
-
+    [[nodiscard]] virtual DrawDiagnosticSnapshot GetDrawDiagnosticSnapshot(std::uint32_t frame = 0) const
+    {
+        return {};
+    }
     // AC-3: Clear color — replaces glClearColor.
     // SDL_gpu backend stores RGBA and applies in BeginFrame render pass.
     virtual void SetClearColor(float /*r*/, float /*g*/, float /*b*/, float /*a*/) {}

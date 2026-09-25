@@ -41,6 +41,7 @@ const std::vector<CommandEntry>& CommandTable()
         {"hotkey", SceneRequirement::Any, &Commands::Hotkey},
         {"click-ui", SceneRequirement::Any, &Commands::ClickUi},
         {"draw-filter", SceneRequirement::Any, &Commands::DrawFilter},
+        {"draw-diagnostic", SceneRequirement::Any, &Commands::DrawDiagnostic},
         {"login", SceneRequirement::PreGame, &Commands::Login},
         {"select-char", SceneRequirement::PreGame, &Commands::SelectCharacter},
         {"logout", SceneRequirement::World, &Commands::Logout},

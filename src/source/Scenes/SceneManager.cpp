@@ -285,7 +285,7 @@ static bool PrepareJpegPixels(mu::FramePixels& pixels)
 
 // Hands the outcome to a scripted caller, if one is waiting, and forgets it.
 // A failed capture is reported too, so no caller waits for its deadline.
-static void ReportScreenshotOutcome(bool saved, const std::wstring& path, int width, int height)
+static void ReportScreenshotOutcome(bool saved, const std::wstring& path, std::uint32_t frame, int width, int height)
 {
     if (!g_screenshotCompletion)
     {
@@ -294,7 +294,7 @@ static void ReportScreenshotOutcome(bool saved, const std::wstring& path, int wi
 
     ScreenshotCompletion completion;
     completion.swap(g_screenshotCompletion);
-    completion(ScreenshotOutcome{saved, path, width, height});
+    completion(ScreenshotOutcome{saved, path, frame, width, height});
 }
 
 static void ConsumeScreenshot()
@@ -315,15 +315,13 @@ static void ConsumeScreenshot()
             return;
         }
 
-        g_screenshotCapture.Clear();
-        ReportScreenshotOutcome(false, fileName, 0, 0);
+        ReportScreenshotOutcome(false, fileName, 0, 0, 0);
         return;
     }
 
     if (!PrepareJpegPixels(pixels))
     {
-        g_screenshotCapture.Clear();
-        ReportScreenshotOutcome(false, fileName, 0, 0);
+        ReportScreenshotOutcome(false, fileName, 0, 0, 0);
         return;
     }
 
@@ -346,8 +344,7 @@ static void ConsumeScreenshot()
         GrabScreen %= 10000;
     }
 
-    g_screenshotCapture.Clear();
-    ReportScreenshotOutcome(saved, fileName, width, height);
+    ReportScreenshotOutcome(saved, fileName, pixels.frame, width, height);
 }
 
 // Starts a capture of the next rendered frame. `message` is the system-log line

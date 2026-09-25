@@ -33,6 +33,7 @@
 
 #include "D3D12Diagnostics.h"
 #include "DrawCommandHistory.h"
+#include "DrawDiagnosticProjection.h"
 #include "DrawFilter.h"
 #include "MuRenderer.h"
 #include "QuadTopology.h"
@@ -250,6 +251,7 @@ static SDL_GPUTexture* s_swapchainTexture = nullptr;
 static Uint32 s_swapW = 0u;
 static Uint32 s_swapH = 0u;
 static std::uint32_t s_pendingFrameCaptureTextureId = 0u;
+static std::uint32_t s_pendingFrameReadbackFrame = 0u;
 static FrameReadbackState s_frameReadbackState;
 static SDL_GPUTexture* s_frameReadbackTexture = nullptr;
 
@@ -426,6 +428,7 @@ static void BlitTextureToSwapchain(SDL_GPUCommandBuffer* commandBuffer, SDL_GPUT
         s_frameReadbackState.Fail();
         return true;
     }
+    pixels.frame = s_pendingFrameReadbackFrame;
 
     s_frameReadbackState.Complete(std::move(pixels));
     return true;
@@ -562,6 +565,7 @@ struct RenderCmd
 {
     RenderCmdType type;
     RenderDebugLabel debugLabel{};
+    std::uint32_t diagnosticScope = 0;
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUTexture* texture;
     SDL_GPUSampler* sampler;
@@ -594,6 +598,145 @@ static std::vector<RenderCmd> s_renderCmds;
 static constexpr std::size_t kNoDrawCommand = std::numeric_limits<std::size_t>::max();
 static Render::DrawCommandHistory s_previousDrawCommands;
 static Render::DrawFilter s_drawFilter;
+
+static DrawDiagnosticSnapshot s_drawDiagnosticFrame;
+static DrawDiagnosticSnapshot s_lastDrawDiagnosticFrame;
+static std::array<DrawDiagnosticSnapshot, 4u> s_drawDiagnosticHistory;
+static std::uint32_t s_activeDrawDiagnosticScope = 0;
+
+[[nodiscard]] static bool IsGroundItemDiagnosticEnabled()
+{
+    return s_drawFilter.enabled && s_drawFilter.onlyMatches && s_drawFilter.hasDebugLabel &&
+           s_drawFilter.debugLabel == static_cast<std::uint8_t>(RenderDebugLabel::GroundItem);
+}
+
+[[nodiscard]] static DrawDiagnosticScope* ActiveDrawDiagnosticScope()
+{
+    if (s_activeDrawDiagnosticScope == 0u || s_activeDrawDiagnosticScope > s_drawDiagnosticFrame.scopes.size())
+    {
+        return nullptr;
+    }
+
+    return &s_drawDiagnosticFrame.scopes[s_activeDrawDiagnosticScope - 1u];
+}
+
+static void BeginGroundItemDiagnosticScope(const float* sourceOrigin)
+{
+    if (!IsGroundItemDiagnosticEnabled() || sourceOrigin == nullptr)
+    {
+        return;
+    }
+
+    DrawDiagnosticScope scope;
+    scope.ordinal = static_cast<std::uint32_t>(s_drawDiagnosticFrame.scopes.size() + 1u);
+    scope.label = RenderDebugLabel::GroundItem;
+    scope.sourceOrigin[0] = sourceOrigin[0];
+    scope.sourceOrigin[1] = sourceOrigin[1];
+    scope.sourceOrigin[2] = sourceOrigin[2];
+    scope.hasSourceOrigin = true;
+    s_drawDiagnosticFrame.scopes.push_back(scope);
+    s_activeDrawDiagnosticScope = scope.ordinal;
+}
+
+static void CloseDrawDiagnosticScope()
+{
+    s_activeDrawDiagnosticScope = 0u;
+}
+
+static void RecordDrawDiagnosticOutcome(std::uint32_t scopeId, bool submitted, bool dropped, bool filtered)
+{
+    if (scopeId == 0u || scopeId > s_drawDiagnosticFrame.scopes.size())
+    {
+        return;
+    }
+
+    DrawDiagnosticScope& scope = s_drawDiagnosticFrame.scopes[scopeId - 1u];
+    if (submitted)
+    {
+        ++scope.submittedCommands;
+    }
+    if (dropped)
+    {
+        ++scope.droppedCommands;
+    }
+    if (filtered)
+    {
+        ++scope.filteredCommands;
+    }
+}
+
+[[nodiscard]] static std::array<float, 4> ProjectSkinnedVertex(const SkinnedVertex3D& vertex,
+                                                                 const SkinningParameters& parameters,
+                                                                 const glm::mat4& mvp)
+{
+    glm::vec3 transformed{vertex.x, vertex.y, vertex.z};
+    const std::int32_t boneIndex = vertex.positionBoneIndex;
+    const std::size_t boneCount = parameters.boneMatrices.size() / 12u;
+    if (boneIndex >= 0 && static_cast<std::size_t>(boneIndex) < boneCount)
+    {
+        const std::size_t row = static_cast<std::size_t>(boneIndex) * 12u;
+        const auto& bones = parameters.boneMatrices;
+        if (parameters.boneScale == 1.0f)
+        {
+            const float restScale = parameters.restPoseScale != 0.0f ? parameters.restPoseScale : 1.0f;
+            const glm::vec4 restPosition{transformed * restScale, 1.0f};
+            transformed = {
+                glm::dot(glm::vec4{bones[row], bones[row + 1u], bones[row + 2u], bones[row + 3u]}, restPosition),
+                glm::dot(glm::vec4{bones[row + 4u], bones[row + 5u], bones[row + 6u], bones[row + 7u]}, restPosition),
+                glm::dot(glm::vec4{bones[row + 8u], bones[row + 9u], bones[row + 10u], bones[row + 11u]}, restPosition),
+            };
+        }
+        else
+        {
+            transformed = {
+                glm::dot(glm::vec3{bones[row], bones[row + 1u], bones[row + 2u]}, transformed),
+                glm::dot(glm::vec3{bones[row + 4u], bones[row + 5u], bones[row + 6u]}, transformed),
+                glm::dot(glm::vec3{bones[row + 8u], bones[row + 9u], bones[row + 10u]}, transformed),
+            };
+            transformed *= parameters.boneScale;
+            transformed += glm::vec3{bones[row + 3u], bones[row + 7u], bones[row + 11u]};
+        }
+    }
+    if (parameters.translate)
+    {
+        transformed = glm::vec3{parameters.bodyOrigin[0], parameters.bodyOrigin[1], parameters.bodyOrigin[2]} +
+                      transformed * parameters.bodyScale;
+    }
+
+    const glm::vec4 clip = mvp * glm::vec4{transformed, 1.0f};
+    return {clip.x, clip.y, clip.z, clip.w};
+}
+
+static void RecordSkinnedDiagnosticGeometry(std::span<const SkinnedVertex3D> vertices,
+                                            const SkinningParameters& parameters,
+                                            const glm::mat4& mvp)
+{
+    DrawDiagnosticScope* scope = ActiveDrawDiagnosticScope();
+    if (scope == nullptr)
+    {
+        return;
+    }
+
+    ++scope->geometryCommands;
+    if (parameters.translate)
+    {
+        scope->effectiveSkinningOrigin[0] = parameters.bodyOrigin[0];
+        scope->effectiveSkinningOrigin[1] = parameters.bodyOrigin[1];
+        scope->effectiveSkinningOrigin[2] = parameters.bodyOrigin[2];
+        scope->effectiveSkinningScale = parameters.bodyScale;
+        scope->hasEffectiveSkinningOrigin = true;
+    }
+
+    for (std::size_t index = 0; index < vertices.size(); index += 3u)
+    {
+        Render::Diagnostic::AddProjectedTriangle(*scope,
+                                                 ProjectSkinnedVertex(vertices[index], parameters, mvp),
+                                                 ProjectSkinnedVertex(vertices[index + 1u], parameters, mvp),
+                                                 ProjectSkinnedVertex(vertices[index + 2u], parameters, mvp),
+                                                 s_drawDiagnosticFrame.viewportWidth,
+                                                 s_drawDiagnosticFrame.viewportHeight);
+    }
+}
 void CaptureLastFrameStats()
 {
     s_lastFrameStats.frame = s_dbgFrameCount;
@@ -626,6 +769,11 @@ void CaptureLastFrameStats()
     s_lastFrameStats.batchBreakDraw = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakDraw);
     s_lastFrameStats.batchBreakOther = FrameProfiler::CounterValue(FrameProfiler::Counter::BatchBreakOther);
     s_lastFrameStats.frameProfilerTextureUploads = FrameProfiler::CounterValue(FrameProfiler::Counter::TextureUploads);
+    s_lastDrawDiagnosticFrame = s_drawDiagnosticFrame;
+    if (s_drawDiagnosticFrame.label == RenderDebugLabel::GroundItem)
+    {
+        s_drawDiagnosticHistory[s_drawDiagnosticFrame.frame % s_drawDiagnosticHistory.size()] = s_drawDiagnosticFrame;
+    }
 }
 
 constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-objects.complete";
@@ -851,6 +999,7 @@ static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedO
                                  static_cast<std::uint8_t>(command.debugLabel), command.blendEnabled}))
     {
         ++s_dbgFilteredDrawsThisFrame;
+        RecordDrawDiagnosticOutcome(command.diagnosticScope, false, false, true);
         return;
     }
 
@@ -862,6 +1011,7 @@ static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedO
         // reports it: the texture lookup already succeeded at record time, so
         // the fallback counter stays silent while the object is simply absent.
         ++s_dbgDroppedDrawsThisFrame;
+        RecordDrawDiagnosticOutcome(command.diagnosticScope, false, true, false);
         return;
     }
 
@@ -892,6 +1042,7 @@ static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedO
     else
         SDL_DrawGPUPrimitives(s_renderPass, command.vtxCount, 1, 0, 0);
     ++s_dbgGpuDrawCallsThisFrame;
+    RecordDrawDiagnosticOutcome(command.diagnosticScope, true, false, false);
 }
 
 // CPU-side scratch buffer for quad strip indices accumulated during the frame.
@@ -1766,6 +1917,8 @@ public:
         s_lastBonePaletteSize = 0u;
         s_lastBonePaletteVersion = 0u;
         s_lastBonePaletteRowOffset = 0u;
+        s_drawDiagnosticFrame = {};
+        s_activeDrawDiagnosticScope = 0u;
         s_texturesInvalidated = false; // Reset per-frame texture invalidation flag
         s_dbgDrawCallsThisFrame = 0u;
         s_dbgVtxBytesThisFrame = 0u;
@@ -1810,6 +1963,13 @@ public:
             s_cmdBuf = nullptr;
             FailPendingFrameReadback();
             return;
+        }
+        if (IsGroundItemDiagnosticEnabled())
+        {
+            s_drawDiagnosticFrame.frame = s_dbgFrameCount;
+            s_drawDiagnosticFrame.label = RenderDebugLabel::GroundItem;
+            s_drawDiagnosticFrame.viewportWidth = s_swapW;
+            s_drawDiagnosticFrame.viewportHeight = s_swapH;
         }
 
         // Story 7.9.7: Fog/alpha uniform is now pushed per-draw-call via
@@ -2204,6 +2364,7 @@ public:
             }
             else
             {
+                s_pendingFrameReadbackFrame = s_dbgFrameCount;
                 if (SubmitFramePixelDownload(s_cmdBuf, s_frameReadbackTexture, frameReadbackFormat))
                 {
                     s_cmdBuf = nullptr;
@@ -3344,6 +3505,7 @@ public:
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawSkinnedTriangles;
         cmd.debugLabel = m_drawDebugLabel;
+        cmd.diagnosticScope = s_activeDrawDiagnosticScope;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         void* sampler = LookupSampler(resolvedTexId);
@@ -3380,6 +3542,7 @@ public:
         cmd.fogUniform = m_fogUniform;
         cmd.blendMode = m_activeBlendMode;
         cmd.blendEnabled = m_blendEnabled;
+        RecordSkinnedDiagnosticGeometry(vertices, parameters, m_mvpMatrix);
         s_renderCmds.push_back(cmd);
 
         ++s_dbgDrawCallsThisFrame;
@@ -3503,6 +3666,32 @@ public:
     void SetDrawDebugLabel(RenderDebugLabel label) override
     {
         m_drawDebugLabel = label;
+    }
+
+    void BeginDrawDiagnosticScope(RenderDebugLabel label, const float* sourceOrigin) override
+    {
+        m_drawDebugLabel = label;
+        if (label == RenderDebugLabel::GroundItem)
+        {
+            BeginGroundItemDiagnosticScope(sourceOrigin);
+        }
+    }
+
+    void EndDrawDiagnosticScope() override
+    {
+        CloseDrawDiagnosticScope();
+        m_drawDebugLabel = RenderDebugLabel::None;
+    }
+
+    [[nodiscard]] DrawDiagnosticSnapshot GetDrawDiagnosticSnapshot(std::uint32_t frame) const override
+    {
+        if (frame == 0u)
+        {
+            return s_lastDrawDiagnosticFrame;
+        }
+
+        const DrawDiagnosticSnapshot& snapshot = s_drawDiagnosticHistory[frame % s_drawDiagnosticHistory.size()];
+        return snapshot.frame == frame ? snapshot : DrawDiagnosticSnapshot{};
     }
 
     // -----------------------------------------------------------------------
