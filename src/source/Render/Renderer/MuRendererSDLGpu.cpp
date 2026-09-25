@@ -673,7 +673,7 @@ constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-object
     {
         return Counter::BatchBreakTexture;
     }
-    if (previous.debugLabel != command.debugLabel)
+    if (s_drawFilter.enabled && s_drawFilter.hasDebugLabel && previous.debugLabel != command.debugLabel)
     {
         return Counter::BatchBreakOther;
     }
