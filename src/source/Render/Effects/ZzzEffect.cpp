@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
+#include "Render/Renderer/MuRenderer.h"
 #include "Render/Models/ZzzBMD.h"
 #include "Engine/Object/ZzzInfomation.h"
 #include "Engine/Object/ZzzObject.h"
@@ -8640,7 +8641,9 @@ void RenderWheelWeapon(OBJECT* o)
     vec3_t Light;
     RequestTerrainLight(o->Position[0], o->Position[1], Light);
     VectorAdd(Light, o->Light, Light);
+    mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::ItemGeometry);
     RenderPartObject(o, Type, NULL, Light, Alpha, o->Owner->WeaponLevel, 0, 0, true, true, true);
+    mu::GetRenderer().SetDrawDebugLabel(mu::RenderDebugLabel::None);
     o->Type = (short)TempType;
 
     VectorCopy(TempPosition, o->Position);

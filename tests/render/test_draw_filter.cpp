@@ -1,6 +1,7 @@
 #include "doctest.h"
 
 #include "Render/Renderer/DrawFilter.h"
+#include "Render/Renderer/MuRenderer.h"
 
 TEST_CASE("draw filter requires every supplied clause [render][draw-filter]")
 {
@@ -14,10 +15,10 @@ TEST_CASE("draw filter requires every supplied clause [render][draw-filter]")
     filter.hasBlend = true;
     filter.blendEnabled = false;
 
-    CHECK(filter.Matches({42u, 12778u, 16u, 16u, false}));
-    CHECK_FALSE(filter.Matches({42u, 12778u, 16u, 16u, true}));
-    CHECK_FALSE(filter.Matches({42u, 12778u, 32u, 16u, false}));
-    CHECK_FALSE(filter.Matches({42u, 3u, 16u, 16u, false}));
+    CHECK(filter.Matches({42u, 12778u, 16u, 16u, 0u, false}));
+    CHECK_FALSE(filter.Matches({42u, 12778u, 16u, 16u, 0u, true}));
+    CHECK_FALSE(filter.Matches({42u, 12778u, 32u, 16u, 0u, false}));
+    CHECK_FALSE(filter.Matches({42u, 3u, 16u, 16u, 0u, false}));
 }
 
 TEST_CASE("disabled draw filter preserves every draw [render][draw-filter]")
@@ -26,5 +27,18 @@ TEST_CASE("disabled draw filter preserves every draw [render][draw-filter]")
     filter.hasTextureId = true;
     filter.textureId = 12778u;
 
-    CHECK_FALSE(filter.Matches({0u, 12778u, 16u, 16u, false}));
+    CHECK_FALSE(filter.Matches({0u, 12778u, 16u, 16u, 0u, false}));
+}
+
+TEST_CASE("draw filter can replay only matching item geometry [render][draw-filter]")
+{
+    const auto itemGeometry = static_cast<std::uint8_t>(mu::RenderDebugLabel::ItemGeometry);
+    Render::DrawFilter filter{};
+    filter.enabled = true;
+    filter.onlyMatches = true;
+    filter.hasDebugLabel = true;
+    filter.debugLabel = itemGeometry;
+
+    CHECK_FALSE(filter.Suppresses({42u, 12778u, 16u, 16u, itemGeometry, false}));
+    CHECK(filter.Suppresses({42u, 12778u, 16u, 16u, 0u, false}));
 }

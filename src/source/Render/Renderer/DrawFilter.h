@@ -10,23 +10,28 @@ struct DrawMetadata
     std::uint32_t textureId = 0;
     std::uint32_t textureWidth = 0;
     std::uint32_t textureHeight = 0;
+    std::uint8_t debugLabel = 0;
     bool blendEnabled = false;
 };
 
 struct DrawFilter
 {
     bool enabled = false;
+    bool onlyMatches = false;
     bool hasSubmittedOrdinal = false;
     bool hasTextureId = false;
     bool hasTextureSize = false;
+    bool hasDebugLabel = false;
     bool hasBlend = false;
     std::uint32_t firstSubmittedOrdinal = 0;
     std::uint32_t lastSubmittedOrdinal = 0;
     std::uint32_t textureId = 0;
     std::uint32_t textureWidth = 0;
     std::uint32_t textureHeight = 0;
+    std::uint8_t debugLabel = 0;
     bool blendEnabled = false;
 
     [[nodiscard]] bool Matches(const DrawMetadata& draw) const;
+    [[nodiscard]] bool Suppresses(const DrawMetadata& draw) const;
 };
 } // namespace Render

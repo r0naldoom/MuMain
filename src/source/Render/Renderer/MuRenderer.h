@@ -170,7 +170,9 @@ struct RendererStats
 
 enum class RenderDebugLabel : std::uint8_t
 {
+    None,
     StaticObjectsComplete,
+    ItemGeometry,
 };
 
 // ---------------------------------------------------------------------------
@@ -207,6 +209,9 @@ public:
 
     // Inserts a capture-only label into the renderer command stream.
     virtual void InsertDebugLabel(RenderDebugLabel /*label*/) {}
+
+    // Applies a semantic label to geometry recorded until the next call.
+    virtual void SetDrawDebugLabel(RenderDebugLabel /*label*/) {}
 
     // Set the active alpha-blending equation.
     virtual void SetBlendMode(BlendMode mode) = 0;

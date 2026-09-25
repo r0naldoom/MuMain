@@ -434,6 +434,9 @@ std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
 
     Render::DrawFilter filter{};
     filter.enabled = true;
+    bool onlyMatches = false;
+    if (request.GetBool("only", onlyMatches))
+        filter.onlyMatches = onlyMatches;
     int value = 0;
     if (request.GetInt("texture_id", value))
     {
@@ -454,6 +457,14 @@ std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
         filter.textureWidth = static_cast<std::uint32_t>(width);
         filter.textureHeight = static_cast<std::uint32_t>(height);
     }
+    std::string category;
+    if (request.GetString("category", category))
+    {
+        if (category != "item_geometry")
+            return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "unsupported draw category");
+        filter.hasDebugLabel = true;
+        filter.debugLabel = static_cast<std::uint8_t>(mu::RenderDebugLabel::ItemGeometry);
+    }
     if (request.GetBool("blend", filter.blendEnabled))
         filter.hasBlend = true;
     if (request.GetInt("submitted_ordinal_first", value))
@@ -466,12 +477,14 @@ std::string DrawFilter(const Request& request, std::unique_ptr<Act>&)
     }
     if (request.GetInt("submitted_ordinal_last", value))
     {
-        if (value < 0 || (filter.hasSubmittedOrdinal && static_cast<std::uint32_t>(value) < filter.firstSubmittedOrdinal))
+        if (value < 0 ||
+            (filter.hasSubmittedOrdinal && static_cast<std::uint32_t>(value) < filter.firstSubmittedOrdinal))
             return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "submitted ordinal range is invalid");
         filter.lastSubmittedOrdinal = static_cast<std::uint32_t>(value);
         filter.hasSubmittedOrdinal = true;
     }
-    if (!filter.hasTextureId && !filter.hasTextureSize && !filter.hasBlend && !filter.hasSubmittedOrdinal)
+    if (!filter.hasTextureId && !filter.hasTextureSize && !filter.hasDebugLabel && !filter.hasBlend &&
+        !filter.hasSubmittedOrdinal)
         return EncodeError(request.EncodedId(), ErrorCode::BadRequest, "draw-filter needs a clause or clear");
 
     mu::GetRenderer().SetDrawFilter(filter);

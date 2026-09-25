@@ -86,7 +86,7 @@ Error codes: `bad_request`, `unknown_command`, `wrong_scene`, `busy`,
 | `use` (`slot`), `equip` (`slot`, `target_slot`) | inventory actions |
 | `say` (`text`), `whisper` (`name`, `text`) | chat, including `/` commands |
 | `console` (`text`) | execute a local `$` diagnostic command; never sends chat. Unknown or malformed text returns `bad_request`; a Debug-only command in Release returns `not_allowed`. |
-| `draw-filter` (`texture_id`, `texture_width`/`texture_height`, `blend`, `submitted_ordinal_first`/`submitted_ordinal_last`) | disable replayed geometry matching every supplied clause. `clear:true` restores normal replay. |
+| `draw-filter` (`texture_id`, `texture_width`/`texture_height`, `blend`, `submitted_ordinal_first`/`submitted_ordinal_last`, `category`, `only`) | suppresses replayed geometry matching every supplied clause; `only:true` replays only matching geometry. `category:"item_geometry"` selects recorded item draws. `clear:true` restores normal replay. |
 | `party` (`action`, `target`) | `invite`, `accept`, `decline`, `leave` |
 | `halt` | stop the walk or repeated attack in progress |
 

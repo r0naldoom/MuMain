@@ -673,6 +673,10 @@ constexpr const char* kStaticObjectsCompleteDebugLabel = "mu.scene.static-object
     {
         return Counter::BatchBreakTexture;
     }
+    if (previous.debugLabel != command.debugLabel)
+    {
+        return Counter::BatchBreakOther;
+    }
     if (previous.blendEnabled != command.blendEnabled || previous.blendMode != command.blendMode)
     {
         return Counter::BatchBreakBlend;
@@ -843,8 +847,8 @@ static void ReplayDrawCommand(const RenderCmd& command, std::uint32_t submittedO
                               const SDL_Rect& scissor, Render::SdlGpuReplayState& state)
 {
     ++s_dbgGeometryCmdsThisFrame;
-    if (s_drawFilter.Matches(
-            {submittedOrdinal, command.textureId, command.textureWidth, command.textureHeight, command.blendEnabled}))
+    if (s_drawFilter.Suppresses({submittedOrdinal, command.textureId, command.textureWidth, command.textureHeight,
+                                 static_cast<std::uint8_t>(command.debugLabel), command.blendEnabled}))
     {
         ++s_dbgFilteredDrawsThisFrame;
         return;
@@ -2668,6 +2672,7 @@ public:
 
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawTriangles2D;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(atlasTexture);
         cmd.sampler = sampler ? static_cast<SDL_GPUSampler*>(sampler) : s_defaultSampler;
@@ -3057,6 +3062,7 @@ public:
         // Record deferred draw command — replayed in EndFrame after vertex data is on the GPU.
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedQuads;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
@@ -3154,6 +3160,7 @@ public:
         // Record deferred draw command — replayed in EndFrame after vertex data is on the GPU.
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawTriangles;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
@@ -3253,6 +3260,7 @@ public:
 
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedQuads;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
@@ -3335,6 +3343,7 @@ public:
 
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawSkinnedTriangles;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         void* sampler = LookupSampler(resolvedTexId);
@@ -3453,6 +3462,7 @@ public:
         // Record deferred draw command — replayed in EndFrame after data is on the GPU.
         RenderCmd cmd{};
         cmd.type = RenderCmdType::DrawIndexedStrip;
+        cmd.debugLabel = m_drawDebugLabel;
         cmd.pipeline = pipeline;
         cmd.texture = static_cast<SDL_GPUTexture*>(texture.texture);
         cmd.sampler = pSampler ? static_cast<SDL_GPUSampler*>(pSampler) : s_defaultSampler;
@@ -3488,6 +3498,11 @@ public:
     void SetDrawFilter(const Render::DrawFilter& filter) override
     {
         s_drawFilter = filter;
+    }
+
+    void SetDrawDebugLabel(RenderDebugLabel label) override
+    {
+        m_drawDebugLabel = label;
     }
 
     // -----------------------------------------------------------------------
@@ -3720,6 +3735,7 @@ private:
 
     // Per-instance render state.
     BlendMode m_activeBlendMode = BlendMode::Alpha;
+    RenderDebugLabel m_drawDebugLabel = RenderDebugLabel::None;
     bool m_blendEnabled = true;
     bool m_depthTestEnabled = true;
     bool m_depthMaskEnabled = true;

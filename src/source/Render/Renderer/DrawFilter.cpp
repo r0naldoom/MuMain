@@ -21,6 +21,15 @@ bool DrawFilter::Matches(const DrawMetadata& draw) const
     {
         return false;
     }
+    if (hasDebugLabel && draw.debugLabel != debugLabel)
+    {
+        return false;
+    }
     return !hasBlend || draw.blendEnabled == blendEnabled;
+}
+
+bool DrawFilter::Suppresses(const DrawMetadata& draw) const
+{
+    return enabled && Matches(draw) != onlyMatches;
 }
 } // namespace Render

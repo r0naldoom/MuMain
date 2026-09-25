@@ -109,19 +109,22 @@ It also deliberately observes post-merge commands.
 `draw-filter` installs one immutable AND predicate for subsequent frame replay:
 
 ```json
-{"cmd":"draw-filter","texture_id":12778,"texture_width":16,"texture_height":16,"blend":false}
+{"cmd":"draw-filter","category":"item_geometry","only":true}
 ```
 
 Every supplied clause must match: `texture_id`, the paired
-`texture_width`/`texture_height`, `blend`, and inclusive
-`submitted_ordinal_first`/`submitted_ordinal_last`. The ordinal is a fallback
+`texture_width`/`texture_height`, `blend`, `category`, and inclusive
+`submitted_ordinal_first`/`submitted_ordinal_last`. The sole category is
+`item_geometry`, recorded while drawing ground items, inventory previews, and
+weapon effects. `only:true` replays matching geometry and suppresses everything
+else; without it, matching geometry is suppressed. The ordinal is a fallback
 for blind bisection, never a RenderDoc EID. `{"cmd":"draw-filter","clear":true}`
 removes the predicate and restores unmodified replay.
 
 ### Information required at the seam
 
 `RenderCmd` snapshots the resolved logical texture ID, dimensions, blend state,
-and geometry ranges at recording time. The texture registry stores
+debug label, and geometry ranges at recording time. The texture registry stores
 `{void*, width, height}` behind each logical ID; the one-entry lookup cache
 returns the same POD already needed to resolve the GPU texture. `GlobalBitmap`
 registers its source dimensions, while dynamic textures retain dimensions from
